@@ -1,0 +1,17 @@
+train:
+  _target_: ifwam.data.IFWAMManifestDataset
+  manifest_path: /2024233240/ifwam_data/manifests/train_mixed.jsonl
+  image_size: [224, 224]
+  num_video_frames: 9
+  num_action_steps: 32
+  num_flow_windows: 2
+  camera_mode: concat
+  action_dim: 7
+  state_dim: 0
+  proprio_dim: 8
+  grid_size: [8, 8]
+  text_embedding_cache_dir: /2024233240/ifwam_data/text_embeds_cache
+  context_len: 128
+  context_dim: 4096
+  layout_homogeneous_batches: true
+val: null

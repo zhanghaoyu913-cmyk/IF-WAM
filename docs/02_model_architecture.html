@@ -1,0 +1,420 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>FastWAM 模型结构与训练/推理流程</title>
+  <style>
+    :root {
+      --bg: #f7f8fb;
+      --ink: #172033;
+      --muted: #5f6b7a;
+      --line: #c8d1dc;
+      --blue: #d9e9ff;
+      --green: #dff4e7;
+      --amber: #fff1cf;
+      --red: #ffe2df;
+      --violet: #ebe5ff;
+      --card: #ffffff;
+    }
+    * { box-sizing: border-box; }
+    body {
+      margin: 0;
+      background: var(--bg);
+      color: var(--ink);
+      font: 15px/1.55 system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+    }
+    main {
+      max-width: 1180px;
+      margin: 0 auto;
+      padding: 28px 24px 56px;
+    }
+    h1, h2, h3 { line-height: 1.2; margin: 0 0 12px; }
+    h1 { font-size: 30px; }
+    h2 { font-size: 22px; margin-top: 34px; }
+    h3 { font-size: 17px; margin-top: 22px; }
+    p { color: var(--muted); margin: 8px 0 14px; }
+    code {
+      background: #eef2f7;
+      border: 1px solid #dde4ee;
+      border-radius: 4px;
+      padding: 1px 5px;
+      font-family: ui-monospace, SFMono-Regular, Consolas, "Liberation Mono", monospace;
+      font-size: 13px;
+    }
+    table {
+      width: 100%;
+      border-collapse: collapse;
+      margin: 12px 0 18px;
+      background: var(--card);
+      border: 1px solid var(--line);
+    }
+    th, td {
+      border: 1px solid var(--line);
+      padding: 9px 10px;
+      vertical-align: top;
+      text-align: left;
+    }
+    th { background: #eef3f8; }
+    .note {
+      border-left: 4px solid #4b7bec;
+      background: #edf4ff;
+      padding: 10px 14px;
+      color: #314464;
+      margin: 12px 0 18px;
+    }
+    .grid {
+      display: grid;
+      grid-template-columns: repeat(12, 1fr);
+      gap: 12px;
+      align-items: stretch;
+    }
+    .box {
+      background: var(--card);
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      padding: 12px;
+      min-height: 80px;
+      position: relative;
+    }
+    .box h3 {
+      margin: 0 0 6px;
+      font-size: 15px;
+    }
+    .box p { margin: 4px 0; font-size: 13px; }
+    .blue { background: var(--blue); }
+    .green { background: var(--green); }
+    .amber { background: var(--amber); }
+    .red { background: var(--red); }
+    .violet { background: var(--violet); }
+    .span-3 { grid-column: span 3; }
+    .span-4 { grid-column: span 4; }
+    .span-5 { grid-column: span 5; }
+    .span-6 { grid-column: span 6; }
+    .span-7 { grid-column: span 7; }
+    .span-8 { grid-column: span 8; }
+    .span-12 { grid-column: span 12; }
+    .arrow {
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      color: #4e5b6a;
+      font-weight: 700;
+      min-height: 80px;
+    }
+    .flow {
+      background: #fff;
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      padding: 16px;
+      overflow-x: auto;
+    }
+    svg {
+      display: block;
+      min-width: 980px;
+      max-width: 100%;
+      height: auto;
+    }
+    .legend {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 8px 14px;
+      margin: 8px 0 18px;
+      color: var(--muted);
+      font-size: 13px;
+    }
+    .pill {
+      display: inline-flex;
+      align-items: center;
+      gap: 6px;
+    }
+    .swatch {
+      width: 14px;
+      height: 14px;
+      border-radius: 3px;
+      border: 1px solid var(--line);
+    }
+    .matrix {
+      display: grid;
+      grid-template-columns: 130px repeat(4, minmax(110px, 1fr));
+      border: 1px solid var(--line);
+      background: #fff;
+      margin: 12px 0 18px;
+    }
+    .matrix div {
+      border-right: 1px solid var(--line);
+      border-bottom: 1px solid var(--line);
+      padding: 8px;
+      min-height: 48px;
+    }
+    .matrix div:nth-child(5n) { border-right: 0; }
+    .matrix .head { background: #eef3f8; font-weight: 650; }
+    .yes { background: #dff4e7; }
+    .no { background: #f5f7fa; color: #8a95a3; }
+    @media (max-width: 860px) {
+      main { padding: 20px 14px 40px; }
+      .span-3, .span-4, .span-5, .span-6, .span-7, .span-8 { grid-column: span 12; }
+      .arrow { min-height: 28px; }
+      .matrix { grid-template-columns: 1fr; }
+      .matrix div { border-right: 0; }
+    }
+  </style>
+</head>
+<body>
+<main>
+  <h1>FastWAM 模型结构与训练/推理流程</h1>
+  <p>本文档按当前仓库代码整理，主要覆盖 <code>FastWAM</code>、<code>FastWAMJoint</code>、<code>FastWAMIDM</code> 三个模型变体。具体尺度细节见 <code>03_tensor_shapes.md</code>。</p>
+
+  <section>
+    <h2>1. 模型总览</h2>
+    <div class="legend">
+      <span class="pill"><span class="swatch" style="background:var(--blue)"></span>视频路径</span>
+      <span class="pill"><span class="swatch" style="background:var(--green)"></span>动作路径</span>
+      <span class="pill"><span class="swatch" style="background:var(--amber)"></span>条件输入</span>
+      <span class="pill"><span class="swatch" style="background:var(--violet)"></span>MoT 混合注意力</span>
+      <span class="pill"><span class="swatch" style="background:var(--red)"></span>loss/output</span>
+    </div>
+
+    <div class="flow">
+      <svg viewBox="0 0 1160 590" role="img" aria-label="FastWAM model diagram">
+        <defs>
+          <marker id="arrow" markerWidth="10" markerHeight="8" refX="9" refY="4" orient="auto" markerUnits="strokeWidth">
+            <path d="M0,0 L10,4 L0,8 Z" fill="#536173"></path>
+          </marker>
+          <style>
+            .node { stroke:#9aa8b8; stroke-width:1.2; rx:10; }
+            .label { font: 14px system-ui, sans-serif; fill:#172033; font-weight:650; }
+            .sub { font: 12px system-ui, sans-serif; fill:#4d5b6a; }
+            .edge { stroke:#536173; stroke-width:1.6; fill:none; marker-end:url(#arrow); }
+          </style>
+        </defs>
+
+        <rect class="node" x="30" y="50" width="180" height="78" fill="#fff1cf"></rect>
+        <text class="label" x="48" y="80">RGB 视频 batch</text>
+        <text class="sub" x="48" y="103">[B,3,T,H,W]</text>
+        <text class="sub" x="48" y="121">训练: 9 帧</text>
+
+        <rect class="node" x="30" y="165" width="180" height="78" fill="#fff1cf"></rect>
+        <text class="label" x="48" y="195">文本 + proprio</text>
+        <text class="sub" x="48" y="218">context [B,L,4096]</text>
+        <text class="sub" x="48" y="236">L=128 或 129</text>
+
+        <rect class="node" x="30" y="280" width="180" height="78" fill="#fff1cf"></rect>
+        <text class="label" x="48" y="310">Action 序列</text>
+        <text class="sub" x="48" y="333">[B,A,Da]</text>
+        <text class="sub" x="48" y="351">A=32</text>
+
+        <rect class="node" x="265" y="50" width="185" height="78" fill="#d9e9ff"></rect>
+        <text class="label" x="285" y="80">Wan2.2 VAE encode</text>
+        <text class="sub" x="285" y="103">冻结模块</text>
+        <text class="sub" x="285" y="121">[B,48,Tz,Hz,Wz]</text>
+
+        <rect class="node" x="505" y="50" width="190" height="78" fill="#d9e9ff"></rect>
+        <text class="label" x="525" y="80">Video noise + pre_dit</text>
+        <text class="sub" x="525" y="103">patchify + time mod</text>
+        <text class="sub" x="525" y="121">tokens [B,Sv,3072]</text>
+
+        <rect class="node" x="505" y="280" width="190" height="78" fill="#dff4e7"></rect>
+        <text class="label" x="525" y="310">Action noise + pre_dit</text>
+        <text class="sub" x="525" y="333">Linear action encoder</text>
+        <text class="sub" x="525" y="351">tokens [B,A,1024]</text>
+
+        <rect class="node" x="755" y="130" width="190" height="155" fill="#ebe5ff"></rect>
+        <text class="label" x="775" y="163">MoT x 30 layers</text>
+        <text class="sub" x="775" y="188">video/action 各自 DiT block</text>
+        <text class="sub" x="775" y="211">Q/K/V 统一为 24*128</text>
+        <text class="sub" x="775" y="234">拼接混合 self-attn</text>
+        <text class="sub" x="775" y="257">再切回各 expert</text>
+
+        <rect class="node" x="995" y="50" width="135" height="78" fill="#ffe2df"></rect>
+        <text class="label" x="1014" y="80">Video head</text>
+        <text class="sub" x="1014" y="103">[B,48,Tz,Hz,Wz]</text>
+        <text class="sub" x="1014" y="121">MSE target</text>
+
+        <rect class="node" x="995" y="280" width="135" height="78" fill="#ffe2df"></rect>
+        <text class="label" x="1014" y="310">Action head</text>
+        <text class="sub" x="1014" y="333">[B,A,Da]</text>
+        <text class="sub" x="1014" y="351">MSE target</text>
+
+        <rect class="node" x="995" y="405" width="135" height="78" fill="#d9e9ff"></rect>
+        <text class="label" x="1014" y="435">VAE decode</text>
+        <text class="sub" x="1014" y="458">推理可输出视频</text>
+        <text class="sub" x="1014" y="476">list[PIL]</text>
+
+        <path class="edge" d="M210 89 H265"></path>
+        <path class="edge" d="M450 89 H505"></path>
+        <path class="edge" d="M210 204 C325 204 390 89 505 89"></path>
+        <path class="edge" d="M210 204 C325 204 390 319 505 319"></path>
+        <path class="edge" d="M210 319 H505"></path>
+        <path class="edge" d="M695 89 C735 89 735 165 755 170"></path>
+        <path class="edge" d="M695 319 C735 319 735 250 755 245"></path>
+        <path class="edge" d="M945 170 C975 170 975 89 995 89"></path>
+        <path class="edge" d="M945 245 C975 245 975 319 995 319"></path>
+        <path class="edge" d="M1062 128 V405"></path>
+      </svg>
+    </div>
+
+    <div class="note">
+      当前配置中 <code>video_dit_config.action_conditioned=false</code>。也就是说 video expert 本身不把 action 拼进 cross-attention context；action 与 video 的交互主要发生在 <code>MoT</code> 的混合 self-attention mask 中。
+    </div>
+  </section>
+
+  <section>
+    <h2>2. 训练时的模型块</h2>
+    <div class="grid">
+      <div class="box amber span-4">
+        <h3>输入条件</h3>
+        <p><code>video</code>: [B,3,T,H,W]，范围 [-1,1]</p>
+        <p><code>action</code>: [B,A,Da]，已归一化</p>
+        <p><code>context</code>: [B,L,4096]，T5 cache</p>
+        <p><code>proprio</code>: [B,A,Dp]，只取第 0 步作为额外 token</p>
+      </div>
+      <div class="box blue span-4">
+        <h3>视频分支</h3>
+        <p>VAE encode: [B,48,Tz,Hz,Wz]</p>
+        <p>Flow matching 加噪并固定第 1 个 latent frame</p>
+        <p>VideoDiT pre_dit: [B,Sv,3072]</p>
+      </div>
+      <div class="box green span-4">
+        <h3>动作分支</h3>
+        <p>Flow matching 加噪: [B,A,Da]</p>
+        <p>ActionDiT action_encoder</p>
+        <p>ActionDiT pre_dit: [B,A,1024]</p>
+      </div>
+      <div class="box violet span-8">
+        <h3>MoT 混合 Transformer</h3>
+        <p>每层中 video/action token 先分别过各自 block 的 LayerNorm、time modulation、Q/K/V projection。</p>
+        <p>两路 Q/K/V 在序列维拼接，做一次带 mask 的 mixed self-attention，再按序列长度切回各 expert。</p>
+        <p>切回后每个 expert 继续做自己的 output projection、cross-attention 到 text/proprio context、MLP。</p>
+      </div>
+      <div class="box red span-4">
+        <h3>预测与损失</h3>
+        <p>Video head 输出 [B,48,Tz,Hz,Wz]</p>
+        <p>Action head 输出 [B,A,Da]</p>
+        <p>loss = video flow target MSE + action flow target MSE</p>
+      </div>
+    </div>
+  </section>
+
+  <section>
+    <h2>3. 推理时的模型块</h2>
+    <table>
+      <thead>
+        <tr>
+          <th>接口</th>
+          <th>使用场景</th>
+          <th>主要流程</th>
+          <th>输出</th>
+        </tr>
+      </thead>
+      <tbody>
+        <tr>
+          <td><code>model.infer_action</code></td>
+          <td>LIBERO/RoboTwin benchmark 默认动作推理</td>
+          <td>输入单帧图像和 prompt/proprio，生成 action latent 并迭代去噪</td>
+          <td><code>{"action": [A,Da]}</code></td>
+        </tr>
+        <tr>
+          <td><code>model.infer_joint</code></td>
+          <td>需要同时观察未来视频 rollout 或 Joint/IDM 完整推理</td>
+          <td>初始化 video/action latent，按 scheduler step 迭代预测 flow target</td>
+          <td><code>{"video": list[PIL], "action": [A,Da]}</code></td>
+        </tr>
+        <tr>
+          <td><code>model.infer</code></td>
+          <td>兼容统一入口</td>
+          <td>当前 FastWAM 中直接转调 <code>infer_joint</code></td>
+          <td>同 <code>infer_joint</code></td>
+        </tr>
+      </tbody>
+    </table>
+
+    <div class="note">
+      训练时通常不加载 text encoder，而使用预计算 context；评测配置会设置 <code>model.load_text_encoder=true</code>，所以推理可以直接传 prompt。
+    </div>
+  </section>
+
+  <section>
+    <h2>4. 三个模型变体的注意力关系</h2>
+    <p>下面的矩阵表示 MoT mixed self-attention 中“query 行能否看 key 列”。</p>
+
+    <h3>FastWAM 基础版</h3>
+    <div class="matrix">
+      <div class="head">Query \ Key</div>
+      <div class="head">video first frame</div>
+      <div class="head">video future frames</div>
+      <div class="head">action tokens</div>
+      <div class="head">text/proprio cross-attn</div>
+      <div class="head">video query</div>
+      <div class="yes">按 <code>first_frame_causal</code> 可见</div>
+      <div class="yes">未来帧互相可见，首帧不看未来</div>
+      <div class="no">不可见</div>
+      <div class="yes">可见</div>
+      <div class="head">action query</div>
+      <div class="yes">可见</div>
+      <div class="no">不可见</div>
+      <div class="yes">可见</div>
+      <div class="yes">可见</div>
+    </div>
+    <p>基础版的 <code>infer_action</code> 只 prefill 第一帧 video KV cache，动作不依赖生成的未来视频。</p>
+
+    <h3>FastWAMJoint</h3>
+    <div class="matrix">
+      <div class="head">Query \ Key</div>
+      <div class="head">video first frame</div>
+      <div class="head">video future frames</div>
+      <div class="head">action tokens</div>
+      <div class="head">text/proprio cross-attn</div>
+      <div class="head">video query</div>
+      <div class="yes">按 video mask 可见</div>
+      <div class="yes">按 video mask 可见</div>
+      <div class="no">不可见</div>
+      <div class="yes">可见</div>
+      <div class="head">action query</div>
+      <div class="yes">可见</div>
+      <div class="yes">可见全部 video tokens</div>
+      <div class="yes">可见</div>
+      <div class="yes">可见</div>
+    </div>
+    <p>Joint 的动作路径会看完整视频 latent，因此 <code>infer_action</code> 内部也会同步去噪 video/action latent，但只返回动作。</p>
+
+    <h3>FastWAMIDM</h3>
+    <div class="matrix">
+      <div class="head">阶段</div>
+      <div class="head">noisy video</div>
+      <div class="head">cond video</div>
+      <div class="head">action tokens</div>
+      <div class="head">说明</div>
+      <div class="head">训练</div>
+      <div class="yes">用于 video loss</div>
+      <div class="yes">teacher-forcing 条件视频</div>
+      <div class="yes">action 只看 cond video + action</div>
+      <div>cond video 每个样本有 0.5 概率被加噪</div>
+      <div class="head">推理</div>
+      <div class="yes">第一阶段单独去噪成视频</div>
+      <div class="yes">作为 action 条件并缓存 video K/V</div>
+      <div class="yes">第二阶段去噪 action</div>
+      <div>先想象未来，再用未来视频推 action</div>
+    </div>
+  </section>
+
+  <section>
+    <h2>5. 关键实现文件</h2>
+    <table>
+      <thead>
+        <tr><th>模块</th><th>代码文件</th><th>要点</th></tr>
+      </thead>
+      <tbody>
+        <tr><td>FastWAM</td><td><code>src/fastwam/models/wan22/fastwam.py</code></td><td>构建输入、训练 loss、基础推理、checkpoint</td></tr>
+        <tr><td>FastWAMJoint</td><td><code>src/fastwam/models/wan22/fastwam_joint.py</code></td><td>重写 action 对 video 的注意力 mask 和 infer_action</td></tr>
+        <tr><td>FastWAMIDM</td><td><code>src/fastwam/models/wan22/fastwam_idm.py</code></td><td>teacher-forcing 训练，两阶段推理</td></tr>
+        <tr><td>VideoDiT expert</td><td><code>src/fastwam/models/wan22/wan_video_dit.py</code></td><td>视频 latent patchify、3D RoPE、DiT blocks、video mask</td></tr>
+        <tr><td>ActionDiT expert</td><td><code>src/fastwam/models/wan22/action_dit.py</code></td><td>action token 编码、1D RoPE、DiT blocks、action head</td></tr>
+        <tr><td>MoT</td><td><code>src/fastwam/models/wan22/mot.py</code></td><td>混合 video/action self-attention，支持 video KV cache</td></tr>
+      </tbody>
+    </table>
+  </section>
+</main>
+</body>
+</html>
+

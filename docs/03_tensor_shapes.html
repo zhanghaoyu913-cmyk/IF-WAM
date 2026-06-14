@@ -1,0 +1,528 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>FastWAM 张量尺度与数据流</title>
+  <style>
+    :root {
+      --bg: #f6f8fb;
+      --panel: #ffffff;
+      --ink: #172033;
+      --muted: #5f6b7a;
+      --line: #c9d3df;
+      --head: #eef3f8;
+      --blue: #dceeff;
+      --green: #dff5ea;
+      --yellow: #fff1cf;
+      --purple: #ece7ff;
+      --red: #ffe4df;
+      --code: #edf2f7;
+    }
+    * {
+      box-sizing: border-box;
+    }
+    body {
+      margin: 0;
+      color: var(--ink);
+      background: var(--bg);
+      font: 15px/1.58 system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+    }
+    main {
+      max-width: 1180px;
+      margin: 0 auto;
+      padding: 28px 24px 56px;
+    }
+    h1, h2, h3 {
+      margin: 0 0 12px;
+      line-height: 1.22;
+    }
+    h1 {
+      font-size: 30px;
+    }
+    h2 {
+      margin-top: 34px;
+      font-size: 22px;
+    }
+    h3 {
+      margin-top: 22px;
+      font-size: 17px;
+    }
+    p {
+      margin: 8px 0 14px;
+      color: var(--muted);
+    }
+    code {
+      padding: 1px 5px;
+      border: 1px solid #dce4ee;
+      border-radius: 4px;
+      background: var(--code);
+      font-family: ui-monospace, SFMono-Regular, Consolas, "Liberation Mono", monospace;
+      font-size: 13px;
+    }
+    pre {
+      overflow-x: auto;
+      margin: 12px 0 16px;
+      padding: 12px 14px;
+      border: 1px solid #dce4ee;
+      border-radius: 8px;
+      background: #101827;
+      color: #e9eef7;
+      font-family: ui-monospace, SFMono-Regular, Consolas, "Liberation Mono", monospace;
+      font-size: 13px;
+      line-height: 1.5;
+    }
+    table {
+      width: 100%;
+      margin: 12px 0 18px;
+      border-collapse: collapse;
+      background: var(--panel);
+      border: 1px solid var(--line);
+    }
+    th, td {
+      padding: 9px 10px;
+      border: 1px solid var(--line);
+      vertical-align: top;
+      text-align: left;
+    }
+    th {
+      background: var(--head);
+      font-weight: 650;
+    }
+    .lead {
+      max-width: 900px;
+      color: var(--muted);
+    }
+    .note {
+      margin: 12px 0 18px;
+      padding: 10px 14px;
+      border-left: 4px solid #4b7bec;
+      background: #edf4ff;
+      color: #314464;
+    }
+    .grid {
+      display: grid;
+      grid-template-columns: repeat(12, 1fr);
+      gap: 12px;
+      margin: 12px 0 18px;
+    }
+    .card {
+      min-height: 92px;
+      padding: 12px;
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      background: var(--panel);
+    }
+    .card h3 {
+      margin: 0 0 7px;
+      font-size: 15px;
+    }
+    .card p {
+      margin: 4px 0;
+      font-size: 13px;
+    }
+    .span-3 { grid-column: span 3; }
+    .span-4 { grid-column: span 4; }
+    .span-6 { grid-column: span 6; }
+    .span-8 { grid-column: span 8; }
+    .span-12 { grid-column: span 12; }
+    .blue { background: var(--blue); }
+    .green { background: var(--green); }
+    .yellow { background: var(--yellow); }
+    .purple { background: var(--purple); }
+    .red { background: var(--red); }
+    .flow {
+      overflow-x: auto;
+      margin: 14px 0 20px;
+      padding: 16px;
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      background: #fff;
+    }
+    svg {
+      display: block;
+      min-width: 1020px;
+      max-width: 100%;
+      height: auto;
+    }
+    .formula {
+      display: grid;
+      grid-template-columns: repeat(3, minmax(0, 1fr));
+      gap: 10px;
+      margin: 12px 0 18px;
+    }
+    .formula div {
+      padding: 10px 12px;
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      background: var(--panel);
+    }
+    .formula strong {
+      display: block;
+      margin-bottom: 4px;
+    }
+    .compact td, .compact th {
+      padding: 7px 9px;
+      font-size: 14px;
+    }
+    @media (max-width: 860px) {
+      main {
+        padding: 20px 14px 40px;
+      }
+      .span-3, .span-4, .span-6, .span-8 {
+        grid-column: span 12;
+      }
+      .formula {
+        grid-template-columns: 1fr;
+      }
+    }
+  </style>
+</head>
+<body>
+<main>
+  <h1>FastWAM 张量尺度与数据流速查</h1>
+  <p class="lead">这是 <code>03_tensor_shapes.md</code> 的 HTML 版本，按当前仓库代码整理数据输入、VAE latent、VideoDiT token、ActionDiT token、MoT 混合注意力、loss 和推理阶段的尺度变化。</p>
+
+  <section>
+    <h2>1. 符号表</h2>
+    <table class="compact">
+      <thead>
+        <tr><th>符号</th><th>含义</th><th>当前典型值</th></tr>
+      </thead>
+      <tbody>
+        <tr><td><code>B</code></td><td>batch size</td><td>训练配置常见为 16</td></tr>
+        <tr><td><code>N_raw</code></td><td>数据集连续观测步数，<code>data.train.num_frames</code></td><td>33</td></tr>
+        <tr><td><code>r</code></td><td>视频抽帧间隔，<code>action_video_freq_ratio</code></td><td>4</td></tr>
+        <tr><td><code>T</code></td><td>输入模型的视频帧数</td><td><code>(N_raw - 1) / r + 1 = 9</code></td></tr>
+        <tr><td><code>A</code></td><td>action horizon</td><td><code>N_raw - 1 = 32</code></td></tr>
+        <tr><td><code>H,W</code></td><td>多相机拼接后的最终视频高宽</td><td>LIBERO: 224x448, RoboTwin: 384x320</td></tr>
+        <tr><td><code>Da</code></td><td>action 维度</td><td>LIBERO: 7, RoboTwin: 14</td></tr>
+        <tr><td><code>Dp</code></td><td>proprio/state 维度</td><td>LIBERO: 8, RoboTwin: 14</td></tr>
+        <tr><td><code>L_text</code></td><td>T5 文本 context 长度</td><td>128</td></tr>
+        <tr><td><code>L</code></td><td>text + 可选 proprio token 长度</td><td><code>128</code> 或 <code>129</code></td></tr>
+        <tr><td><code>Cv</code></td><td>Wan2.2 VAE latent channel</td><td>48</td></tr>
+        <tr><td><code>Tz</code></td><td>VAE latent 时间长度</td><td><code>(T - 1) / 4 + 1 = 3</code></td></tr>
+        <tr><td><code>Hz,Wz</code></td><td>VAE latent 空间尺寸</td><td><code>H/16, W/16</code></td></tr>
+        <tr><td><code>p</code></td><td>VideoDiT patch size</td><td><code>[1,2,2]</code></td></tr>
+        <tr><td><code>Sv</code></td><td>video token 数</td><td><code>Tz * (Hz/2) * (Wz/2)</code></td></tr>
+        <tr><td><code>Sa</code></td><td>action token 数</td><td><code>A</code></td></tr>
+        <tr><td><code>Dv</code></td><td>video expert hidden dim</td><td>3072</td></tr>
+        <tr><td><code>Dh_action</code></td><td>action expert hidden dim</td><td>1024</td></tr>
+        <tr><td><code>Hh</code></td><td>attention heads</td><td>24</td></tr>
+        <tr><td><code>Dhead</code></td><td>attention head dim</td><td>128</td></tr>
+        <tr><td><code>Dqkv</code></td><td>mixed attention Q/K/V 维度</td><td><code>Hh * Dhead = 3072</code></td></tr>
+      </tbody>
+    </table>
+  </section>
+
+  <section>
+    <h2>2. 数据流总图</h2>
+    <div class="flow">
+      <svg viewBox="0 0 1160 520" role="img" aria-label="FastWAM tensor shape flow">
+        <defs>
+          <marker id="arrow" markerWidth="10" markerHeight="8" refX="9" refY="4" orient="auto" markerUnits="strokeWidth">
+            <path d="M0,0 L10,4 L0,8 Z" fill="#536173"></path>
+          </marker>
+          <style>
+            .node { stroke:#9aa8b8; stroke-width:1.2; rx:10; }
+            .label { font: 14px system-ui, sans-serif; fill:#172033; font-weight:650; }
+            .sub { font: 12px system-ui, sans-serif; fill:#4d5b6a; }
+            .edge { stroke:#536173; stroke-width:1.6; fill:none; marker-end:url(#arrow); }
+          </style>
+        </defs>
+
+        <rect class="node" x="30" y="55" width="185" height="85" fill="#fff1cf"></rect>
+        <text class="label" x="48" y="84">DataLoader batch</text>
+        <text class="sub" x="48" y="108">video [B,3,T,H,W]</text>
+        <text class="sub" x="48" y="128">action [B,A,Da]</text>
+
+        <rect class="node" x="30" y="195" width="185" height="85" fill="#fff1cf"></rect>
+        <text class="label" x="48" y="224">Text + proprio</text>
+        <text class="sub" x="48" y="248">context [B,128,4096]</text>
+        <text class="sub" x="48" y="268">+ [B,1,4096]</text>
+
+        <rect class="node" x="275" y="55" width="185" height="85" fill="#dceeff"></rect>
+        <text class="label" x="293" y="84">VAE encode</text>
+        <text class="sub" x="293" y="108">[B,48,Tz,Hz,Wz]</text>
+        <text class="sub" x="293" y="128">Tz=3, H/16, W/16</text>
+
+        <rect class="node" x="520" y="55" width="190" height="85" fill="#dceeff"></rect>
+        <text class="label" x="538" y="84">VideoDiT pre_dit</text>
+        <text class="sub" x="538" y="108">patch [1,2,2]</text>
+        <text class="sub" x="538" y="128">tokens [B,Sv,3072]</text>
+
+        <rect class="node" x="520" y="300" width="190" height="85" fill="#dff5ea"></rect>
+        <text class="label" x="538" y="329">ActionDiT pre_dit</text>
+        <text class="sub" x="538" y="353">Linear(Da,1024)</text>
+        <text class="sub" x="538" y="373">tokens [B,A,1024]</text>
+
+        <rect class="node" x="770" y="155" width="180" height="125" fill="#ece7ff"></rect>
+        <text class="label" x="790" y="186">MoT x 30</text>
+        <text class="sub" x="790" y="211">Q/K/V 拼接</text>
+        <text class="sub" x="790" y="233">[B,Sv+A,3072]</text>
+        <text class="sub" x="790" y="255">mixed attention</text>
+
+        <rect class="node" x="1005" y="55" width="130" height="85" fill="#ffe4df"></rect>
+        <text class="label" x="1022" y="84">Video head</text>
+        <text class="sub" x="1022" y="108">[B,48,Tz,Hz,Wz]</text>
+        <text class="sub" x="1022" y="128">flow target</text>
+
+        <rect class="node" x="1005" y="300" width="130" height="85" fill="#ffe4df"></rect>
+        <text class="label" x="1022" y="329">Action head</text>
+        <text class="sub" x="1022" y="353">[B,A,Da]</text>
+        <text class="sub" x="1022" y="373">flow target</text>
+
+        <path class="edge" d="M215 98 H275"></path>
+        <path class="edge" d="M460 98 H520"></path>
+        <path class="edge" d="M215 238 C350 238 390 98 520 98"></path>
+        <path class="edge" d="M215 238 C350 238 390 342 520 342"></path>
+        <path class="edge" d="M215 125 C330 180 405 315 520 342"></path>
+        <path class="edge" d="M710 98 C750 98 745 180 770 190"></path>
+        <path class="edge" d="M710 342 C750 342 745 255 770 245"></path>
+        <path class="edge" d="M950 190 C985 180 980 98 1005 98"></path>
+        <path class="edge" d="M950 245 C985 255 980 342 1005 342"></path>
+      </svg>
+    </div>
+  </section>
+
+  <section>
+    <h2>3. 数据集输出尺度</h2>
+    <p><code>RobotVideoDataset._get</code> 返回单样本，<code>DataLoader</code> collate 后加上 batch 维。</p>
+    <div class="grid">
+      <div class="card yellow span-6">
+        <h3>单样本</h3>
+        <p><code>video</code>: [3,T,H,W]，范围 [-1,1]</p>
+        <p><code>action</code>: [A,Da]</p>
+        <p><code>proprio</code>: [A,Dp]</p>
+        <p><code>context</code>: [128,4096]</p>
+        <p><code>image_is_pad</code>: [T], <code>action_is_pad</code>: [A]</p>
+      </div>
+      <div class="card yellow span-6">
+        <h3>Batch</h3>
+        <p><code>video</code>: [B,3,T,H,W]</p>
+        <p><code>action</code>: [B,A,Da]</p>
+        <p><code>proprio</code>: [B,A,Dp]</p>
+        <p><code>context</code>: [B,128,4096]</p>
+        <p><code>image_is_pad</code>: [B,T], <code>action_is_pad</code>: [B,A]</p>
+      </div>
+    </div>
+  </section>
+
+  <section>
+    <h2>4. 当前任务的具体尺度</h2>
+    <h3>LIBERO 2 相机配置</h3>
+    <p>来自 <code>configs/data/libero_2cam.yaml</code>。两路相机各 resize 到 <code>[3,224,224]</code>，再水平拼接成 <code>H=224, W=448</code>。动作维度 <code>Da=7</code>，proprio 维度 <code>Dp=8</code>。</p>
+    <table>
+      <thead><tr><th>阶段</th><th>尺度</th></tr></thead>
+      <tbody>
+        <tr><td>原始 processor 图像</td><td>2 cameras，每个 <code>[T,3,224,224]</code></td></tr>
+        <tr><td>拼接后视频</td><td><code>[B,3,9,224,448]</code></td></tr>
+        <tr><td>VAE latent</td><td><code>[B,48,3,14,28]</code></td></tr>
+        <tr><td>VideoDiT patch grid</td><td><code>F=3, h=7, w=14</code></td></tr>
+        <tr><td>video tokens</td><td><code>[B,294,3072]</code></td></tr>
+        <tr><td>每个 latent frame token 数</td><td><code>7 * 14 = 98</code></td></tr>
+        <tr><td>action</td><td><code>[B,32,7]</code></td></tr>
+        <tr><td>action tokens</td><td><code>[B,32,1024]</code></td></tr>
+        <tr><td>text context</td><td><code>[B,128,4096]</code></td></tr>
+        <tr><td>text + proprio context</td><td><code>[B,129,4096]</code></td></tr>
+      </tbody>
+    </table>
+
+    <h3>RoboTwin 3 相机配置</h3>
+    <p>来自 <code>configs/data/robotwin.yaml</code>。顶部相机 resize 到 <code>256x320</code>，左右腕部相机各 resize 到 <code>128x160</code>，底部横拼后再与顶部纵拼成 <code>384x320</code>。action/proprio 维度都是 14。</p>
+    <table>
+      <thead><tr><th>阶段</th><th>尺度</th></tr></thead>
+      <tbody>
+        <tr><td>拼接后视频</td><td><code>[B,3,9,384,320]</code></td></tr>
+        <tr><td>VAE latent</td><td><code>[B,48,3,24,20]</code></td></tr>
+        <tr><td>VideoDiT patch grid</td><td><code>F=3, h=12, w=10</code></td></tr>
+        <tr><td>video tokens</td><td><code>[B,360,3072]</code></td></tr>
+        <tr><td>每个 latent frame token 数</td><td><code>12 * 10 = 120</code></td></tr>
+        <tr><td>action</td><td><code>[B,32,14]</code></td></tr>
+        <tr><td>action tokens</td><td><code>[B,32,1024]</code></td></tr>
+        <tr><td>text context</td><td><code>[B,128,4096]</code></td></tr>
+        <tr><td>text + proprio context</td><td><code>[B,129,4096]</code></td></tr>
+      </tbody>
+    </table>
+  </section>
+
+  <section>
+    <h2>5. 训练前向传播尺度</h2>
+
+    <h3>5.1 FastWAM.build_inputs</h3>
+    <pre>video:        [B,3,T,H,W]
+action:       [B,A,Da]
+proprio:      [B,A,Dp]
+context:      [B,128,4096]
+context_mask: [B,128]</pre>
+
+    <div class="formula">
+      <div><strong>合法视频尺寸</strong><code>H % 16 == 0</code><br><code>W % 16 == 0</code></div>
+      <div><strong>合法视频帧数</strong><code>T % 4 == 1</code><br>当前 <code>T=9</code></div>
+      <div><strong>action 对齐</strong><code>A % (T - 1) == 0</code><br>当前 <code>32 % 8 == 0</code></div>
+    </div>
+
+    <h3>5.2 VAE encode 与 proprio token</h3>
+    <pre>input_latents = VAE.encode(video)
+input_latents: [B,48,Tz,Hz,Wz]
+Tz = (T - 1) / 4 + 1
+Hz = H / 16
+Wz = W / 16
+
+first_frame_latents = input_latents[:,:,0:1]
+first_frame_latents: [B,48,1,Hz,Wz]
+
+proprio[:,0,:] -> Linear(Dp,4096) -> [B,1,4096]
+context:      [B,128,4096] -> [B,129,4096]
+context_mask: [B,128]      -> [B,129]</pre>
+
+    <h3>5.3 Flow matching 加噪</h3>
+    <table>
+      <thead><tr><th>分支</th><th>张量</th><th>尺度</th></tr></thead>
+      <tbody>
+        <tr><td>视频</td><td><code>noise_video</code></td><td><code>[B,48,Tz,Hz,Wz]</code></td></tr>
+        <tr><td>视频</td><td><code>timestep_video</code></td><td><code>[B]</code></td></tr>
+        <tr><td>视频</td><td><code>latents_noisy</code></td><td><code>[B,48,Tz,Hz,Wz]</code></td></tr>
+        <tr><td>视频</td><td><code>target_video</code></td><td><code>[B,48,Tz,Hz,Wz]</code></td></tr>
+        <tr><td>动作</td><td><code>noise_action</code></td><td><code>[B,A,Da]</code></td></tr>
+        <tr><td>动作</td><td><code>timestep_action</code></td><td><code>[B]</code></td></tr>
+        <tr><td>动作</td><td><code>noisy_action</code></td><td><code>[B,A,Da]</code></td></tr>
+        <tr><td>动作</td><td><code>target_action</code></td><td><code>[B,A,Da]</code></td></tr>
+      </tbody>
+    </table>
+    <pre>noisy = (1 - sigma) * sample + sigma * noise
+target = noise - sample</pre>
+
+    <h3>5.4 VideoDiT pre_dit</h3>
+    <pre>input:
+x:        [B,48,Tz,Hz,Wz]
+timestep: [B]
+context:  [B,L,4096]
+
+Conv3d(in=48,out=3072,kernel=[1,2,2],stride=[1,2,2])
+grid:   [F=Tz, h=Hz/2, w=Wz/2]
+tokens: [B,Sv,3072]
+Sv = F * h * w
+
+t_mod:       [B,Sv,6,3072]
+context_emb: [B,L,3072]
+context_mask expand: [B,Sv,L]
+freqs: [Sv,1,128]</pre>
+
+    <h3>5.5 ActionDiT pre_dit</h3>
+    <pre>input:
+action_tokens: [B,A,Da]
+timestep:      [B]
+context:       [B,L,4096]
+
+Linear(Da,1024)
+tokens: [B,A,1024]
+
+t_mod:       [B,6,1024]
+context_emb: [B,L,1024]
+context_mask expand: [B,A,L]
+freqs: [A,1,128]</pre>
+
+    <h3>5.6 MoT 每层内部尺度</h3>
+    <div class="note">Video token hidden dim 是 3072，Action token hidden dim 是 1024，但两者的 attention Q/K/V 都投影到 <code>24 * 128 = 3072</code>，因此可以在序列维拼接做 mixed attention。</div>
+    <pre>video q/k/v:  [B,Sv,3072]
+action q/k/v: [B,A,3072]
+
+concat:
+q_cat/k_cat/v_cat: [B,Sv+A,3072]
+
+mixed_attention:
+mixed: [B,Sv+A,3072]
+
+split:
+video mixed slice:  [B,Sv,3072] -> video self_attn.o  -> [B,Sv,3072]
+action mixed slice: [B,A,3072]  -> action self_attn.o -> [B,A,1024]</pre>
+
+    <h3>5.7 post_dit 与 loss</h3>
+    <pre>Video head:
+tokens_out["video"]: [B,Sv,3072]
+head projection:     [B,Sv,48*1*2*2]
+unpatchify:          [B,48,Tz,Hz,Wz]
+
+if first frame fixed:
+pred_video[:, :, 1:]:   [B,48,Tz-1,Hz,Wz]
+target_video[:, :, 1:]: [B,48,Tz-1,Hz,Wz]
+
+Action head:
+tokens_out["action"]: [B,A,1024]
+head:                 [B,A,Da]
+
+loss_total = lambda_video * video_loss + lambda_action * action_loss</pre>
+  </section>
+
+  <section>
+    <h2>6. 推理尺度</h2>
+    <h3>6.1 基础 FastWAM infer_action</h3>
+    <pre>input_image: [1,3,H,W]
+prompt 或 context/context_mask
+proprio: [Dp] 或 [1,Dp]
+action_horizon A
+
+first_frame_latents: [1,48,1,Hz,Wz]
+video tokens:        [1,tokens_per_frame,3072]
+
+latents_action: [1,A,Da]
+pred_action:    [1,A,Da]
+output action:  [A,Da]</pre>
+
+    <h3>6.2 infer_joint</h3>
+    <pre>latents_video:  [1,48,Tz,Hz,Wz]
+latents_action: [1,A,Da]
+first_frame_latents 写入 latents_video[:,:,0:1]
+
+每个 denoise step:
+_predict_joint_noise
+  -> pred_video:  [1,48,Tz,Hz,Wz]
+  -> pred_action: [1,A,Da]
+
+output:
+video:  list[PIL.Image], 长度 T
+action: [A,Da]</pre>
+
+    <h3>6.3 变体差异</h3>
+    <table>
+      <thead>
+        <tr>
+          <th>变体</th>
+          <th><code>infer_action</code> 是否生成完整 video latent</th>
+          <th>action 能否看未来 video token</th>
+          <th>输出视频</th>
+        </tr>
+      </thead>
+      <tbody>
+        <tr><td><code>FastWAM</code></td><td>否，只用第一帧 cache</td><td>否</td><td>否</td></tr>
+        <tr><td><code>FastWAMJoint</code></td><td>是，同步去噪 video/action</td><td>是</td><td><code>infer_action</code> 不返回，<code>infer_joint</code> 返回</td></tr>
+        <tr><td><code>FastWAMIDM</code></td><td>是，先去噪 video，再用 video KV cache 去噪 action</td><td>是</td><td><code>infer_joint</code> 返回，<code>infer_action</code> 只取 action</td></tr>
+      </tbody>
+    </table>
+  </section>
+
+  <section>
+    <h2>7. 注意力 mask 尺度</h2>
+    <pre>FastWAM / FastWAMJoint:
+attention_mask: [Sv + A, Sv + A]
+
+基础 FastWAM:
+video -> video: 由 video_expert.build_video_to_video_mask 控制
+video -> action: false
+action -> action: true
+action -> video: 仅 first-frame video tokens true
+
+FastWAMJoint:
+action -> video: 全部 video tokens true
+
+FastWAMIDM 训练:
+tokens = [noisy_video, cond_video, action]
+attention_mask: [Sv + Sv + A, Sv + Sv + A]
+action -> cond_video: true
+action -> noisy_video: false</pre>
+  </section>
+</main>
+</body>
+</html>
+

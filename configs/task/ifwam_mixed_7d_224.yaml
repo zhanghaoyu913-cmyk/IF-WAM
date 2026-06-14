@@ -1,0 +1,113 @@
+# @package _global_
+defaults:
+  - override /data: ifwam_mixed
+  - override /model: ifwam_fastwam
+  - override /ifwam: default
+  - _self_
+
+batch_size: 2
+num_workers: 4
+learning_rate: 1.0e-4
+num_epochs: 1
+max_steps: null
+log_every: 10
+# Full DeepSpeed checkpoints are ~100GB each for this model, so do not save them every 100 steps.
+save_every: 0
+save_weights_every: 500
+save_state_every: 1000
+save_final_state: false
+eval_every: 0
+
+# Only samples whose action schema is already canonical 7D may enable action/aflow.
+# Multi-view cameras remain separate on disk and are concatenated within each trajectory sample.
+ifwam:
+  ifwam:
+    enabled: true
+
+    data:
+      manifest_path: /2024233240/ifwam_data/manifests/train_mixed.jsonl
+      camera_mode: concat
+      num_video_frames: 9
+      num_action_steps: 32
+      num_flow_windows: 2
+      action_dim: 7
+      state_dim: 0
+      image_size: [224, 224]
+
+    mot:
+      return_mid_states: true
+      mid_layer_indices: [8, 12, 16, 20]
+      mid_state_aggregation: mean
+
+    process_flow_readout:
+      enabled: true
+      num_flow_windows: 2
+      video_dim: 3072
+      action_dim: 1024
+      text_dim: 4096
+      hidden_dim: 1024
+      pooling_type: role_query
+      use_video_readout: true
+      use_action_readout: true
+      use_grid_readout: true
+      action_segment_len: 16
+      grid_size: [8, 8]
+      dropout: 0.0
+
+    scoring_head:
+      enabled: true
+      hidden_dim: 1024
+      score_granularity: trajectory
+      use_progress_label: false
+
+    losses:
+      lambda_vflow: 0.02
+      lambda_aflow: 0.01
+      lambda_gridflow: 0.01
+      lambda_score: 0.0
+
+      vflow:
+        w_dir: 1.0
+        w_mag: 0.1
+        w_rel: 0.1
+        w_static: 0.0
+        w_consistency: 0.05
+        normalize_rel: true
+        rel_scale_mode: sample_max
+        rel_scale_eps: 1.0e-6
+        move_threshold: 1.0e-4
+        static_threshold: 1.0e-4
+
+      aflow:
+        w_dir_rel: 1.0
+        w_agent_dir: 0.0
+        w_rel: 0.1
+        w_contrastive: 0.1
+        w_consistency: 0.0
+        normalize_rel: true
+        rel_normalize_mode: unit_vector
+        rel_scale_eps: 1.0e-6
+        move_threshold: 1.0e-4
+        sigma_gamma: 2.0
+        sigma_threshold: null
+        temperature: 0.1
+
+      gridflow:
+        # Presence remains disabled until legacy one-cell grid teachers are regenerated.
+        w_presence: 0.0
+        w_dir: 0.5
+        w_smooth: 0.05
+        w_mag: 0.05
+        smoothness_type: l1
+        smoothness_mask_mode: both_valid
+        move_threshold_mode: adaptive_mad
+        move_threshold_min: 1.0e-3
+        move_threshold_mad_scale: 3.0
+        balanced_presence: true
+        presence_pos_weight: 1.0
+        presence_neg_weight: 0.25
+        presence_threshold: 0.5
+        move_threshold: 1.0e-4
+
+      score:
+        w_score: 1.0
