@@ -649,6 +649,8 @@ class FastWAM(torch.nn.Module):
         loss_dict = {
             "loss_video": self.loss_lambda_video * float(loss_video.detach().item()),
             "loss_action": self.loss_lambda_action * float(loss_action.detach().item()),
+            "unweighted_action_loss": float(loss_action.detach().item()),
+            "weighted_action_loss": self.loss_lambda_action * float(loss_action.detach().item()),
             "ifwam/loss_mask_video_ratio": float(video_mask.float().mean().detach().item()),
             "ifwam/loss_mask_action_ratio": float(action_mask.float().mean().detach().item()),
         }
@@ -699,8 +701,11 @@ class FastWAM(torch.nn.Module):
                     grid_valid = grid_valid.to(device=self.device, dtype=self.torch_dtype, non_blocking=True)
                     grid_quality = grid_quality.to(device=self.device, dtype=self.torch_dtype, non_blocking=True)
                     l_grid, logs = grid_flow_loss(pred_grid_flow, pred_motion_logit, grid_target, grid_valid, grid_quality, loss_mask, losses_cfg.get("gridflow", {}))
-                    loss_total = loss_total + float(losses_cfg.get("lambda_gridflow", 0.0)) * l_grid
+                    grid_lambda = float(losses_cfg.get("lambda_gridflow", 0.0))
+                    loss_total = loss_total + grid_lambda * l_grid
                     loss_dict["loss_gridflow"] = float(l_grid.detach().item())
+                    loss_dict["unweighted_gridflow_loss"] = float(l_grid.detach().item())
+                    loss_dict["weighted_gridflow_loss"] = grid_lambda * float(l_grid.detach().item())
                     for k, v in logs.items():
                         loss_dict[f"ifwam/{k}"] = float(v.detach().item())
                 if self.flow_scoring_head is not None and pred_vflow is not None and pred_aflow is not None:
@@ -716,6 +721,7 @@ class FastWAM(torch.nn.Module):
                         if torch.is_tensor(value):
                             loss_dict[f"ifwam/loss_mask_{key}_ratio"] = float(value.float().mean().detach().item())
 
+        loss_dict["total_loss"] = float(loss_total.detach().item())
         return loss_total, loss_dict
 
     @torch.no_grad()

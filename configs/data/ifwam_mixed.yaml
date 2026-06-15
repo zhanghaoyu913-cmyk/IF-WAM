@@ -14,4 +14,8 @@ train:
   context_len: 128
   context_dim: 4096
   layout_homogeneous_batches: true
+  enable_gridflow_teacher: true
+  sampler_group_sampling: proportional_to_num_rows
+  sampler_shuffle: true
+  sampler_drop_last: true
 val: null

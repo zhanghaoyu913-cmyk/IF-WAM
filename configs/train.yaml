@@ -31,6 +31,7 @@ eval_num_inference_steps: 10
 
 # training
 gradient_accumulation_steps: 1
+expected_global_batch_size: null
 mixed_precision: "bf16" # one of: [no, fp16, bf16]
 seed: 42
 max_grad_norm: 1.0

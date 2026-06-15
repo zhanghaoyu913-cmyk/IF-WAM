@@ -58,7 +58,7 @@ def collate_ifwam_batch(batch: list[dict[str, Any]]) -> dict[str, Any]:
         )
     out["loss_mask"] = loss_mask
 
-    for key in ("language", "prompt", "dataset_family", "source_dataset", "task_label", "traj_dir"):
+    for key in ("language", "prompt", "dataset_family", "source_dataset", "task_label", "traj_dir", "layout_key"):
         out[key] = [item.get(key) for item in batch]
     out["semantics"] = [item.get("semantics", {}) for item in batch]
 

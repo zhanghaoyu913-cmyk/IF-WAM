@@ -53,6 +53,10 @@ class IFWAMManifestDataset(Dataset):
         grid_size: Sequence[int] | tuple[int, int] = (8, 8),
         prompt_template: str = DEFAULT_PROMPT,
         layout_homogeneous_batches: bool = True,
+        enable_gridflow_teacher: bool = True,
+        sampler_group_sampling: str = "proportional_to_num_rows",
+        sampler_shuffle: bool = True,
+        sampler_drop_last: bool = True,
     ):
         self.manifest_path = Path(manifest_path)
         self.image_size = (int(image_size[0]), int(image_size[1]))
@@ -69,6 +73,10 @@ class IFWAMManifestDataset(Dataset):
         self.grid_size = (int(grid_size[0]), int(grid_size[1]))
         self.prompt_template = str(prompt_template)
         self.layout_homogeneous_batches = bool(layout_homogeneous_batches)
+        self.enable_gridflow_teacher = bool(enable_gridflow_teacher)
+        self.sampler_group_sampling = str(sampler_group_sampling)
+        self.sampler_shuffle = bool(sampler_shuffle)
+        self.sampler_drop_last = bool(sampler_drop_last)
         from .collate import collate_ifwam_batch
         self.collate_fn = collate_ifwam_batch
         if self.camera_mode not in {"concat", "stack"}:
@@ -96,6 +104,10 @@ class IFWAMManifestDataset(Dataset):
         action_type = str(row.get("action_type") or ("none" if row.get("action_start") is None else "dataset_native"))
         action_dim = int(row.get("action_dim", self.action_dim))
         return (self.camera_mode, cameras, self.image_size, action_type, action_dim)
+
+    def source_key(self, idx: int) -> str:
+        row = self.rows[idx]
+        return str(row.get("source_dataset") or row.get("dataset_family") or "unknown")
 
     def _frame_path(self, traj_dir: Path, camera: str, frame_idx: int) -> Path:
         frame_name = f"{int(frame_idx):06d}.jpg"
@@ -250,6 +262,14 @@ class IFWAMManifestDataset(Dataset):
 
     def _load_grid_flow(self, row: dict[str, Any], traj_dir: Path, loss_mask: dict[str, float]):
         gh, gw = self.grid_size
+        if not self.enable_gridflow_teacher:
+            loss_mask["gridflow"] = 0.0
+            return (
+                torch.zeros(self.num_flow_windows, gh, gw, 3, dtype=torch.float32),
+                torch.zeros(self.num_flow_windows, gh, gw, dtype=torch.float32),
+                torch.zeros(self.num_flow_windows, dtype=torch.float32),
+                torch.tensor(0.0, dtype=torch.float32),
+            )
         path = traj_dir / "flow" / "grid_flow.npz"
         if not path.exists():
             loss_mask["gridflow"] = 0.0
@@ -364,6 +384,7 @@ class IFWAMManifestDataset(Dataset):
             "source_dataset": row.get("source_dataset"),
             "task_label": row.get("task_label"),
             "traj_dir": str(traj_dir),
+            "layout_key": repr(self.batch_group_key(idx)),
         }
         if context is not None:
             sample["context"] = context

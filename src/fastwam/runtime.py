@@ -367,6 +367,8 @@ def run_training(cfg: DictConfig):
     config_payload = OmegaConf.to_container(cfg, resolve=True)
     with open(Path(cfg.output_dir) / "config.yaml", "w") as f:
         OmegaConf.save(config_payload, f)
+    with open(Path(cfg.output_dir) / "resolved_config.yaml", "w") as f:
+        OmegaConf.save(config_payload, f)
 
     model_device = _resolve_train_device()
     mixed_precision = _normalize_mixed_precision(cfg.mixed_precision)

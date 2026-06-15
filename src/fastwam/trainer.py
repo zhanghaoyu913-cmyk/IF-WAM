@@ -3,6 +3,9 @@ import json
 import inspect
 import os
 import re
+import subprocess
+import sys
+from collections import Counter
 from math import ceil
 from pathlib import Path
 import time
@@ -49,6 +52,7 @@ class Wan22Trainer:
         self.eval_num_inference_steps = int(cfg.eval_num_inference_steps)
         self.gradient_accumulation_steps = int(cfg.gradient_accumulation_steps)
         self.max_grad_norm = float(cfg.max_grad_norm)
+        self.expected_global_batch_size = cfg.get("expected_global_batch_size", None)
         self.seed = int(cfg.seed)
         
         self.resume = cfg.resume
@@ -86,8 +90,15 @@ class Wan22Trainer:
             if deepspeed_plugin is not None
             else "disabled"
         )
+        self.global_batch_size = self.batch_size * self.gradient_accumulation_steps * self.accelerator.num_processes
+        if self.expected_global_batch_size is not None and int(self.expected_global_batch_size) != int(self.global_batch_size):
+            raise ValueError(
+                f"global_batch_size mismatch: expected {self.expected_global_batch_size}, got {self.global_batch_size} "
+                f"(per_device={self.batch_size}, grad_accum={self.gradient_accumulation_steps}, world_size={self.accelerator.num_processes})"
+            )
+
         logger.info(
-            "Accelerate training: distributed_type=%s zero_stage=%s world_size=%d process_index=%d cfg_mixed_precision=%s accelerator_mixed_precision=%s grad_accum=%d grad_clip=%.4f",
+            "Accelerate training: distributed_type=%s zero_stage=%s world_size=%d process_index=%d cfg_mixed_precision=%s accelerator_mixed_precision=%s grad_accum=%d global_batch=%d grad_clip=%.4f",
             self.accelerator.distributed_type,
             zero_stage,
             self.accelerator.num_processes,
@@ -95,6 +106,7 @@ class Wan22Trainer:
             self.mixed_precision,
             self.accelerator.mixed_precision,
             self.gradient_accumulation_steps,
+            self.global_batch_size,
             self.max_grad_norm,
         )
         logger.info("using accelerator.device=%s", self.accelerator.device)
@@ -138,6 +150,12 @@ class Wan22Trainer:
         ensure_dir(self.weights_dir)
         ensure_dir(self.state_dir)
         ensure_dir(self.eval_dir)
+        self.train_metrics_path = os.path.join(self.output_dir, "train_metrics.jsonl")
+        self.actual_seen_by_source = Counter()
+        self.actual_seen_by_layout = Counter()
+        if self.accelerator.is_main_process:
+            self._write_run_metadata()
+            self._write_data_and_sampler_stats()
 
         self.model, self.optimizer, self.train_loader, self.scheduler = self.accelerator.prepare(
             self.model, self.optimizer, self.train_loader, self.scheduler
@@ -232,6 +250,94 @@ class Wan22Trainer:
         self.wandb_run.finish()
         self.wandb_run = None
 
+
+    def _git_commit_hash(self) -> str:
+        try:
+            result = subprocess.run(
+                ["git", "rev-parse", "HEAD"],
+                cwd=Path(__file__).resolve().parents[3],
+                check=True,
+                text=True,
+                capture_output=True,
+            )
+            return result.stdout.strip()
+        except Exception:
+            return "unknown"
+
+    def _dataset_source_counts(self) -> dict[str, int]:
+        counts = Counter()
+        for idx in range(len(self.train_dataset)):
+            if hasattr(self.train_dataset, "source_key"):
+                key = self.train_dataset.source_key(idx)
+            else:
+                key = "unknown"
+            counts[str(key)] += 1
+        return dict(sorted(counts.items()))
+
+    def _dataset_layout_counts(self) -> dict[str, int]:
+        counts = Counter()
+        if hasattr(self.train_dataset, "batch_group_key"):
+            for idx in range(len(self.train_dataset)):
+                counts[repr(self.train_dataset.batch_group_key(idx))] += 1
+        return dict(sorted(counts.items()))
+
+    def _write_run_metadata(self):
+        payload = {
+            "git_commit_hash": self._git_commit_hash(),
+            "command_line": sys.argv,
+            "output_dir": self.output_dir,
+            "global_batch_size": int(self.global_batch_size),
+            "per_device_batch_size": int(self.batch_size),
+            "gradient_accumulation_steps": int(self.gradient_accumulation_steps),
+            "world_size": int(self.accelerator.num_processes),
+            "seed": int(self.seed),
+        }
+        with open(os.path.join(self.output_dir, "run_metadata.json"), "w", encoding="utf-8") as f:
+            json.dump(payload, f, ensure_ascii=True, indent=2)
+
+    def _write_data_and_sampler_stats(self):
+        data_stats = {
+            "dataset_num_rows": int(len(self.train_dataset)),
+            "source_counts": self._dataset_source_counts(),
+            "layout_counts": self._dataset_layout_counts(),
+        }
+        sampler_stats = {
+            "sampler_class": type(self.train_sampler).__name__,
+            "batch_size_per_device": int(self.batch_size),
+            "global_batch_size": int(self.global_batch_size),
+            "drop_last": bool(getattr(self.train_sampler, "drop_last", False)),
+            "shuffle": bool(getattr(self.train_sampler, "shuffle", False)),
+            "group_sampling": str(getattr(self.train_sampler, "group_sampling", "unknown")),
+            "num_batches_per_epoch": int(len(self.train_sampler)) if hasattr(self.train_sampler, "__len__") else None,
+            "group_counts": self.train_sampler.group_counts() if hasattr(self.train_sampler, "group_counts") else {},
+        }
+        with open(os.path.join(self.output_dir, "data_stats.json"), "w", encoding="utf-8") as f:
+            json.dump(data_stats, f, ensure_ascii=True, indent=2)
+        with open(os.path.join(self.output_dir, "sampler_stats.json"), "w", encoding="utf-8") as f:
+            json.dump(sampler_stats, f, ensure_ascii=True, indent=2)
+        logger.info("Data source counts: %s", data_stats["source_counts"])
+        logger.info("Sampler group counts: %s", sampler_stats["group_counts"])
+
+    def _sync_counter(self, counter: Counter) -> Counter:
+        if torch.distributed.is_available() and torch.distributed.is_initialized():
+            gathered = [None for _ in range(torch.distributed.get_world_size())]
+            torch.distributed.all_gather_object(gathered, dict(counter))
+            merged = Counter()
+            for item in gathered:
+                merged.update(item or {})
+            return merged
+        return Counter(counter)
+
+    def _batch_counter(self, sample, key: str) -> Counter:
+        values = sample.get(key, [])
+        if isinstance(values, str):
+            values = [values]
+        return Counter(str(v) for v in values)
+
+    def _append_train_metrics(self, payload: dict):
+        with open(self.train_metrics_path, "a", encoding="utf-8") as f:
+            f.write(json.dumps(payload, ensure_ascii=True, sort_keys=True) + "\n")
+
     def _build_loader(self, dataset, worker_init_fn=None):
         collate_fn = getattr(dataset, "collate_fn", None)
         if bool(getattr(dataset, "layout_homogeneous_batches", False)):
@@ -239,7 +345,9 @@ class Wan22Trainer:
                 dataset=dataset,
                 batch_size=self.batch_size,
                 seed=self.seed,
-                drop_last=False,
+                drop_last=bool(getattr(dataset, "sampler_drop_last", True)),
+                group_sampling=str(getattr(dataset, "sampler_group_sampling", "proportional_to_num_rows")),
+                shuffle=bool(getattr(dataset, "sampler_shuffle", True)),
             )
             return DataLoader(
                 dataset,
@@ -769,6 +877,8 @@ class Wan22Trainer:
         self.run_start_time = time.perf_counter()
         accum_loss_sum = torch.tensor(0.0, device=self.accelerator.device, dtype=torch.float32)
         accum_metric_sums: dict[str, float] = {}
+        accum_source_counts = Counter()
+        accum_layout_counts = Counter()
         accum_micro_count = 0
 
         while self.global_step < self.max_steps:
@@ -790,6 +900,8 @@ class Wan22Trainer:
                 accum_loss_sum = accum_loss_sum + loss.detach().float()
                 for key, value in loss_dict.items():
                     accum_metric_sums[key] = accum_metric_sums.get(key, 0.0) + float(value)
+                accum_source_counts.update(self._batch_counter(sample, "source_dataset"))
+                accum_layout_counts.update(self._batch_counter(sample, "layout_key"))
                 accum_micro_count += 1
                 self.accelerator.backward(loss)
 
@@ -798,7 +910,13 @@ class Wan22Trainer:
                     loss_for_log = accum_loss_sum / float(denom_micro)
                     metrics_for_log = {key: value / float(denom_micro) for key, value in accum_metric_sums.items()}
                     accum_loss_sum = torch.tensor(0.0, device=self.accelerator.device, dtype=torch.float32)
+                    source_counts_for_step = self._sync_counter(accum_source_counts)
+                    layout_counts_for_step = self._sync_counter(accum_layout_counts)
+                    self.actual_seen_by_source.update(source_counts_for_step)
+                    self.actual_seen_by_layout.update(layout_counts_for_step)
                     accum_metric_sums = {}
+                    accum_source_counts = Counter()
+                    accum_layout_counts = Counter()
                     accum_micro_count = 0
                     grad_norm = self.accelerator.clip_grad_norm_(self.model.parameters(), self.max_grad_norm)
                     self.optimizer.step()
@@ -839,6 +957,27 @@ class Wan22Trainer:
                             eta_str,
                         )
                         logger.info(description)
+
+                        total_samples_seen = int(self.global_step * self.global_batch_size)
+                        effective_epoch = float(total_samples_seen / max(len(self.train_dataset), 1))
+                        train_metrics_payload = {
+                            "global_step": int(self.global_step),
+                            "global_batch_size": int(self.global_batch_size),
+                            "dataset_num_rows": int(len(self.train_dataset)),
+                            "effective_epoch": effective_epoch,
+                            "total_samples_seen": total_samples_seen,
+                            "actual_seen_by_source": dict(sorted(self.actual_seen_by_source.items())),
+                            "actual_seen_by_layout": dict(sorted(self.actual_seen_by_layout.items())),
+                            "action_mask_fraction": float(global_loss_metrics.get("ifwam/loss_mask_action_ratio", 0.0)),
+                            "gridflow_mask_fraction": float(global_loss_metrics.get("ifwam/loss_mask_gridflow_ratio", 0.0)),
+                            "unweighted_action_loss": float(global_loss_metrics.get("unweighted_action_loss", 0.0)),
+                            "unweighted_gridflow_loss": float(global_loss_metrics.get("unweighted_gridflow_loss", 0.0)),
+                            "weighted_action_loss": float(global_loss_metrics.get("weighted_action_loss", 0.0)),
+                            "weighted_gridflow_loss": float(global_loss_metrics.get("weighted_gridflow_loss", 0.0)),
+                            "total_loss": float(global_loss_metrics.get("total_loss", global_loss)),
+                            "lr": current_lr,
+                        }
+                        self._append_train_metrics(train_metrics_payload)
 
                         wandb_payload = {
                             "train/loss": global_loss,
