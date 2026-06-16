@@ -1,0 +1,113 @@
+# @package _global_
+defaults:
+  - override /data: ifwam_mixed
+  - override /model: ifwam_fastwam
+  - override /ifwam: default
+  - _self_
+
+batch_size: 2
+num_workers: 4
+learning_rate: 2.0e-5
+num_epochs: 1
+max_steps: 2000
+log_every: 10
+save_every: 0
+save_weights_every: 0
+save_state_every: 0
+save_final_state: false
+eval_every: 0
+gradient_accumulation_steps: 4
+expected_global_batch_size: 32
+weight_decay: 0.01
+max_grad_norm: 1.0
+lr_scheduler_type: cosine
+mixed_precision: bf16
+seed: 0
+resume: null
+wandb:
+  enabled: false
+  project: if-wam
+  group: ifwam-fastwam-comparison
+  mode: online
+  core_metrics_only: false
+
+model:
+  loss:
+    lambda_action: 1.0
+
+ifwam:
+  ifwam:
+    enabled: true
+    data:
+      manifest_path: /2024233240/if-wam_incoming/ifwam_data/manifests/dense_ablation/train_libero_dense_f4_s1_nogrid.jsonl
+      camera_mode: concat
+      num_video_frames: 9
+      num_action_steps: 32
+      num_flow_windows: 2
+      action_dim: 7
+      state_dim: 0
+      image_size: [224, 224]
+    mot:
+      return_mid_states: true
+      mid_layer_indices: [8, 12, 16, 20]
+      mid_state_aggregation: mean
+    process_flow_readout:
+      enabled: true
+      num_flow_windows: 2
+      video_dim: 3072
+      action_dim: 1024
+      text_dim: 4096
+      hidden_dim: 1024
+      pooling_type: role_query
+      use_video_readout: true
+      use_action_readout: true
+      use_grid_readout: true
+      action_segment_len: 16
+      grid_size: [8, 8]
+      dropout: 0.0
+    scoring_head:
+      enabled: true
+      hidden_dim: 1024
+      score_granularity: trajectory
+      use_progress_label: false
+    losses:
+      lambda_vflow: 0.0
+      lambda_aflow: 0.0
+      lambda_gridflow: 0.0
+      lambda_score: 0.0
+      gridflow:
+        w_presence: 0.0
+        w_dir: 0.5
+        w_smooth: 0.05
+        w_mag: 0.05
+        smoothness_type: l1
+        smoothness_mask_mode: both_valid
+        move_threshold_mode: adaptive_mad
+        move_threshold_min: 1.0e-3
+        move_threshold_mad_scale: 3.0
+        balanced_presence: true
+        presence_pos_weight: 1.0
+        presence_neg_weight: 0.25
+        presence_threshold: 0.5
+        move_threshold: 1.0e-4
+
+data:
+  train:
+    manifest_path: /2024233240/if-wam_incoming/ifwam_data/manifests/dense_ablation/train_libero_dense_f4_s1_nogrid.jsonl
+    enable_gridflow_teacher: false
+    image_size: [224, 224]
+    camera_mode: concat
+    num_video_frames: 9
+    num_action_steps: 32
+    num_flow_windows: 2
+    action_dim: 7
+    state_dim: 0
+    proprio_dim: 8
+    grid_size: [8, 8]
+    text_embedding_cache_dir: /2024233240/if-wam_incoming/ifwam_data/text_embeds_cache
+    context_len: 128
+    context_dim: 4096
+    layout_homogeneous_batches: true
+    sampler_group_sampling: proportional_to_num_rows
+    sampler_shuffle: true
+    sampler_drop_last: true
