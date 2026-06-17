@@ -76,11 +76,8 @@ run_stage() {
 # 1. Fast-WAM architecture + current subsampled LIBERO manifest, from base init.
 run_stage "fastwam_libero_manifest_20k" "fastwam_libero_manifest_20k" 20000 ""
 
-# 2. IF-WAM + current subsampled LIBERO + LIBERO grid flow, then LIBERO action grounding.
+# 2. IF-WAM + current subsampled LIBERO + LIBERO grid flow.
 run_stage "ifwam_libero_grid_pretrain_20k" "ifwam_libero_grid_pretrain_20k" 20000 ""
-libero_pretrain_dir="$(run_dir_for "ifwam_libero_grid_pretrain_20k" "${RUN_TAG}_ifwam_libero_grid_pretrain_20k")"
-libero_pretrain_ckpt="${libero_pretrain_dir}/checkpoints/weights/$(step_tag 20000)"
-run_stage "ifwam_libero_grid_grounding_2k" "ifwam_libero_grid_grounding_2k" 2000 "${libero_pretrain_ckpt}"
 
 # 3. IF-WAM + current subsampled mixed data + mixed grid flow, then LIBERO action grounding.
 run_stage "ifwam_mixed_grid_pretrain_20k" "ifwam_mixed_grid_pretrain_20k" 20000 ""
@@ -91,5 +88,5 @@ run_stage "ifwam_mixed_grid_grounding_2k" "ifwam_mixed_grid_grounding_2k" 2000 "
 echo "[queue] complete current subsampled three-way training seed=${SEED}"
 echo "[queue] final checkpoints:"
 echo "  fastwam_libero: $(run_dir_for "fastwam_libero_manifest_20k" "${RUN_TAG}_fastwam_libero_manifest_20k")/checkpoints/weights/final.pt"
-echo "  ifwam_libero_grid: $(run_dir_for "ifwam_libero_grid_grounding_2k" "${RUN_TAG}_ifwam_libero_grid_grounding_2k")/checkpoints/weights/final.pt"
+echo "  ifwam_libero_grid: $(run_dir_for "ifwam_libero_grid_pretrain_20k" "${RUN_TAG}_ifwam_libero_grid_pretrain_20k")/checkpoints/weights/final.pt"
 echo "  ifwam_mixed_grid: $(run_dir_for "ifwam_mixed_grid_grounding_2k" "${RUN_TAG}_ifwam_mixed_grid_grounding_2k")/checkpoints/weights/final.pt"
