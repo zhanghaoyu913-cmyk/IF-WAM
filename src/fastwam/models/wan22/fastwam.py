@@ -41,10 +41,12 @@ class FastWAM(torch.nn.Module):
         loss_lambda_video: float = 1.0,
         loss_lambda_action: float = 1.0,
         ifwam: Optional[Mapping[str, Any]] = None,
+        grid_expert: Optional[ActionDiT] = None,
     ):
         super().__init__()
         self.video_expert = video_expert
         self.action_expert = action_expert
+        self.grid_expert = grid_expert
         self.mot = mot
         # Keep trainer compatibility: optimizer and freeze logic use `model.dit`.
         self.dit = self.mot
@@ -89,9 +91,23 @@ class FastWAM(torch.nn.Module):
         self.loss_lambda_action = float(loss_lambda_action)
         self.ifwam_cfg = self._normalize_ifwam_cfg(ifwam)
         self.ifwam_enabled = bool(self.ifwam_cfg.get("enabled", False))
+        gridfm_cfg = dict(self.ifwam_cfg.get("grid_flow_matching", {}))
+        self.grid_flow_matching_enabled = bool(gridfm_cfg.get("enabled", False)) and self.grid_expert is not None
+        self.grid_flow_dim = int(gridfm_cfg.get("flow_dim", 3))
+        self.grid_flow_num_windows = int(gridfm_cfg.get("num_flow_windows", 2))
+        self.grid_flow_grid_size = tuple(int(v) for v in gridfm_cfg.get("grid_size", (8, 8)))
+        self.loss_lambda_gridflow_fm = float(gridfm_cfg.get("lambda_gridflow_fm", 0.1))
+        self.train_grid_scheduler = WanContinuousFlowMatchScheduler(
+            num_train_timesteps=int(gridfm_cfg.get("num_train_timesteps", action_num_train_timesteps)),
+            shift=float(gridfm_cfg.get("train_shift", action_train_shift)),
+        )
+        self.infer_grid_scheduler = WanContinuousFlowMatchScheduler(
+            num_train_timesteps=int(gridfm_cfg.get("num_train_timesteps", action_num_train_timesteps)),
+            shift=float(gridfm_cfg.get("infer_shift", action_infer_shift)),
+        )
         self.process_flow_readout = None
         self.flow_scoring_head = None
-        if self.ifwam_enabled:
+        if self.ifwam_enabled and bool(self.ifwam_cfg.get("process_flow_readout", {}).get("enabled", True)):
             readout_cfg = dict(self.ifwam_cfg.get("process_flow_readout", {}))
             readout_cfg.setdefault("video_dim", getattr(self.video_expert, "hidden_dim", 3072))
             readout_cfg.setdefault("action_dim", getattr(self.action_expert, "hidden_dim", 1024))
@@ -159,6 +175,35 @@ class FastWAM(torch.nn.Module):
             return torch.cat(video_states, dim=-1), torch.cat(action_states, dim=-1)
         raise ValueError(f"Unsupported IF-WAM mid_state_aggregation={aggregation!r}")
 
+    def _flatten_grid_flow(self, grid_flow: torch.Tensor) -> tuple[torch.Tensor, tuple[int, int, int]]:
+        if grid_flow.ndim != 5:
+            raise ValueError(
+                f"`grid_flow_teacher` must be [B,K,Gh,Gw,D], got {tuple(grid_flow.shape)}"
+            )
+        bsz, num_windows, gh, gw, flow_dim = grid_flow.shape
+        if int(flow_dim) != int(self.grid_flow_dim):
+            raise ValueError(f"grid flow dim mismatch: expected {self.grid_flow_dim}, got {flow_dim}")
+        return grid_flow.reshape(bsz, num_windows * gh * gw, flow_dim), (num_windows, gh, gw)
+
+    def _grid_flow_loss_per_sample(
+        self,
+        pred_grid: torch.Tensor,
+        target_grid: torch.Tensor,
+        grid_valid: Optional[torch.Tensor],
+        grid_quality: Optional[torch.Tensor],
+    ) -> torch.Tensor:
+        loss = F.mse_loss(pred_grid.float(), target_grid.float(), reduction="none").mean(dim=-1)
+        if grid_valid is None:
+            return loss.mean(dim=(1, 2, 3))
+        valid = grid_valid.to(device=loss.device, dtype=loss.dtype)
+        if grid_quality is not None:
+            quality = grid_quality.to(device=loss.device, dtype=loss.dtype)
+            while quality.ndim < valid.ndim:
+                quality = quality.unsqueeze(-1)
+            valid = valid * quality
+        denom = valid.sum(dim=(1, 2, 3)).clamp_min(1.0)
+        return (loss * valid).sum(dim=(1, 2, 3)) / denom
+
     @classmethod
     def from_wan22_pretrained(
         cls,
@@ -210,6 +255,19 @@ class FastWAM(torch.nn.Module):
             device=device,
             torch_dtype=torch_dtype,
         )
+        ifwam_cfg = cls._normalize_ifwam_cfg(ifwam)
+        gridfm_cfg = dict(ifwam_cfg.get("grid_flow_matching", {}))
+        grid_expert = None
+        if bool(gridfm_cfg.get("enabled", False)):
+            grid_dit_config = dict(action_dit_config)
+            grid_dit_config["action_dim"] = int(gridfm_cfg.get("flow_dim", 3))
+            grid_expert = ActionDiT.from_pretrained(
+                action_dit_config=grid_dit_config,
+                action_dit_pretrained_path=action_dit_pretrained_path,
+                skip_dit_load_from_pretrain=skip_dit_load_from_pretrain,
+                device=device,
+                torch_dtype=torch_dtype,
+            )
         if int(action_expert.num_heads) != int(video_expert.num_heads):
             raise ValueError("ActionDiT `num_heads` must match video expert for MoT mixed attention.")
         if int(action_expert.attn_head_dim) != int(video_expert.attn_head_dim):
@@ -217,8 +275,18 @@ class FastWAM(torch.nn.Module):
         if int(len(action_expert.blocks)) != int(len(video_expert.blocks)):
             raise ValueError("ActionDiT `num_layers` must match video expert.")
 
+        mixtures = {"video": video_expert}
+        if grid_expert is not None:
+            if int(grid_expert.num_heads) != int(video_expert.num_heads):
+                raise ValueError("GridFlow expert `num_heads` must match video expert for MoT mixed attention.")
+            if int(grid_expert.attn_head_dim) != int(video_expert.attn_head_dim):
+                raise ValueError("GridFlow expert `attn_head_dim` must match video expert for MoT mixed attention.")
+            if int(len(grid_expert.blocks)) != int(len(video_expert.blocks)):
+                raise ValueError("GridFlow expert `num_layers` must match video expert.")
+            mixtures["grid"] = grid_expert
+        mixtures["action"] = action_expert
         mot = MoT(
-            mixtures={"video": video_expert, "action": action_expert},
+            mixtures=mixtures,
             mot_checkpoint_mixed_attn=mot_checkpoint_mixed_attn,
         )
 
@@ -242,6 +310,7 @@ class FastWAM(torch.nn.Module):
             loss_lambda_video=loss_lambda_video,
             loss_lambda_action=loss_lambda_action,
             ifwam=ifwam,
+            grid_expert=grid_expert,
         )
         model.model_paths = {
             "video_dit": components.dit_path,
@@ -250,6 +319,9 @@ class FastWAM(torch.nn.Module):
             "tokenizer": components.tokenizer_path,
             "action_dit_backbone": (
                 "SKIPPED_PRETRAIN" if skip_dit_load_from_pretrain else action_dit_pretrained_path
+            ),
+            "grid_dit_backbone": (
+                None if grid_expert is None else ("SKIPPED_PRETRAIN" if skip_dit_load_from_pretrain else action_dit_pretrained_path)
             ),
         }
         return model
@@ -463,9 +535,12 @@ class FastWAM(torch.nn.Module):
         action_seq_len: int,
         video_tokens_per_frame: int,
         device: torch.device,
+        grid_seq_len: int = 0,
     ) -> torch.Tensor:
-        total_seq_len = video_seq_len + action_seq_len
+        total_seq_len = video_seq_len + grid_seq_len + action_seq_len
         mask = torch.zeros((total_seq_len, total_seq_len), dtype=torch.bool, device=device)
+        if video_tokens_per_frame <= 0:
+            raise ValueError(f"`video_tokens_per_frame` must be positive, got {video_tokens_per_frame}")
 
         # video -> video
         mask[:video_seq_len, :video_seq_len] = self.video_expert.build_video_to_video_mask(
@@ -473,11 +548,44 @@ class FastWAM(torch.nn.Module):
             video_tokens_per_frame=video_tokens_per_frame,
             device=device,
         )
+        grid_start = video_seq_len
+        action_start = video_seq_len + grid_seq_len
+        if grid_seq_len > 0:
+            # Grid flow is treated as a video-side causal modality.  Window k
+            # represents the transition ending at latent frame k+1, so it must
+            # not see video/grid tokens from later latent frames.
+            grid_tokens_per_window = max(1, grid_seq_len // max(1, self.grid_flow_num_windows))
+            for v_idx in range(video_seq_len):
+                video_frame = min(v_idx // video_tokens_per_frame, max(0, self.grid_flow_num_windows))
+                visible_grid_windows = min(video_frame, self.grid_flow_num_windows)
+                if visible_grid_windows > 0:
+                    mask[v_idx, grid_start:grid_start + visible_grid_windows * grid_tokens_per_window] = True
+            for g_idx in range(grid_seq_len):
+                grid_window = min(g_idx // grid_tokens_per_window, self.grid_flow_num_windows - 1)
+                visible_video_tokens = min(video_seq_len, (grid_window + 2) * video_tokens_per_frame)
+                visible_grid_tokens = min(grid_seq_len, (grid_window + 1) * grid_tokens_per_window)
+                row = grid_start + g_idx
+                mask[row, :visible_video_tokens] = True
+                mask[row, grid_start:grid_start + visible_grid_tokens] = True
         # action -> action
-        mask[video_seq_len:, video_seq_len:] = True
-        # action -> first-frame video only
-        first_frame_tokens = min(video_tokens_per_frame, video_seq_len)
-        mask[video_seq_len:, :first_frame_tokens] = True
+        mask[action_start:, action_start:] = True
+        if grid_seq_len > 0:
+            # Action token t can condition on video/grid prefixes aligned to its
+            # action segment.  Action self-attention remains unchanged from
+            # Fast-WAM because action diffusion denoises the full horizon jointly.
+            grid_tokens_per_window = max(1, grid_seq_len // max(1, self.grid_flow_num_windows))
+            action_segment_len = max(1, action_seq_len // max(1, self.grid_flow_num_windows))
+            for a_idx in range(action_seq_len):
+                action_window = min(a_idx // action_segment_len, self.grid_flow_num_windows - 1)
+                visible_video_tokens = min(video_seq_len, (action_window + 2) * video_tokens_per_frame)
+                visible_grid_tokens = min(grid_seq_len, (action_window + 1) * grid_tokens_per_window)
+                row = action_start + a_idx
+                mask[row, :visible_video_tokens] = True
+                mask[row, grid_start:grid_start + visible_grid_tokens] = True
+        else:
+            # Legacy Fast-WAM action denoising only sees first-frame video.
+            first_frame_tokens = min(video_tokens_per_frame, video_seq_len)
+            mask[action_start:, :first_frame_tokens] = True
         return mask
 
     def _compute_video_loss_per_sample(
@@ -549,6 +657,32 @@ class FastWAM(torch.nn.Module):
         )
         noisy_action = self.train_action_scheduler.add_noise(action, noise_action, timestep_action)
         target_action = self.train_action_scheduler.training_target(action, noise_action, timestep_action)
+        grid_pre = None
+        target_grid = None
+        grid_valid = None
+        grid_quality = None
+        timestep_grid = None
+        grid_shape = None
+        if self.grid_flow_matching_enabled:
+            grid_teacher = sample.get("grid_flow_teacher")
+            if grid_teacher is None:
+                raise ValueError("grid flow matching is enabled but sample has no `grid_flow_teacher`.")
+            grid_teacher = grid_teacher.to(device=self.device, dtype=self.torch_dtype, non_blocking=True)
+            grid_tokens_clean, grid_shape = self._flatten_grid_flow(grid_teacher)
+            noise_grid = torch.randn_like(grid_tokens_clean)
+            timestep_grid = self.train_grid_scheduler.sample_training_t(
+                batch_size=batch_size,
+                device=self.device,
+                dtype=grid_tokens_clean.dtype,
+            )
+            noisy_grid = self.train_grid_scheduler.add_noise(grid_tokens_clean, noise_grid, timestep_grid)
+            target_grid = self.train_grid_scheduler.training_target(grid_tokens_clean, noise_grid, timestep_grid)
+            grid_valid = sample.get("grid_flow_valid")
+            if grid_valid is not None:
+                grid_valid = grid_valid.to(device=self.device, dtype=self.torch_dtype, non_blocking=True)
+            grid_quality = sample.get("grid_flow_quality")
+            if grid_quality is not None:
+                grid_quality = grid_quality.to(device=self.device, dtype=self.torch_dtype, non_blocking=True)
 
         video_pre = self.video_expert.pre_dit(
             x=latents,
@@ -565,42 +699,57 @@ class FastWAM(torch.nn.Module):
             context=context,
             context_mask=context_mask,
         )
+        if self.grid_flow_matching_enabled:
+            grid_pre = self.grid_expert.pre_dit(
+                action_tokens=noisy_grid,
+                timestep=timestep_grid,
+                context=context,
+                context_mask=context_mask,
+            )
 
         video_tokens = video_pre["tokens"]
         action_tokens = action_pre["tokens"]
+        grid_tokens = grid_pre["tokens"] if grid_pre is not None else None
 
         attention_mask = self._build_mot_attention_mask(
             video_seq_len=video_tokens.shape[1],
             action_seq_len=action_tokens.shape[1],
             video_tokens_per_frame=int(video_pre["meta"]["tokens_per_frame"]),
             device=video_tokens.device,
+            grid_seq_len=0 if grid_tokens is None else grid_tokens.shape[1],
         )
         mot_cfg = dict(self.ifwam_cfg.get("mot", {})) if self.ifwam_enabled else {}
         return_mid_states = bool(mot_cfg.get("return_mid_states", False)) and self.process_flow_readout is not None
+        embeds_all = {"video": video_tokens}
+        freqs_all = {"video": video_pre["freqs"]}
+        context_all = {
+            "video": {
+                "context": video_pre["context"],
+                "mask": video_pre["context_mask"],
+            },
+        }
+        t_mod_all = {"video": video_pre["t_mod"]}
+        if grid_pre is not None:
+            embeds_all["grid"] = grid_tokens
+            freqs_all["grid"] = grid_pre["freqs"]
+            context_all["grid"] = {
+                "context": grid_pre["context"],
+                "mask": grid_pre["context_mask"],
+            }
+            t_mod_all["grid"] = grid_pre["t_mod"]
+        embeds_all["action"] = action_tokens
+        freqs_all["action"] = action_pre["freqs"]
+        context_all["action"] = {
+            "context": action_pre["context"],
+            "mask": action_pre["context_mask"],
+        }
+        t_mod_all["action"] = action_pre["t_mod"]
         mot_out = self.mot(
-            embeds_all={
-                "video": video_tokens,
-                "action": action_tokens,
-            },
+            embeds_all=embeds_all,
             attention_mask=attention_mask,
-            freqs_all={
-                "video": video_pre["freqs"],
-                "action": action_pre["freqs"],
-            },
-            context_all={
-                "video": {
-                    "context": video_pre["context"],
-                    "mask": video_pre["context_mask"],
-                },
-                "action": {
-                    "context": action_pre["context"],
-                    "mask": action_pre["context_mask"],
-                },
-            },
-            t_mod_all={
-                "video": video_pre["t_mod"],
-                "action": action_pre["t_mod"],
-            },
+            freqs_all=freqs_all,
+            context_all=context_all,
+            t_mod_all=t_mod_all,
             return_mid_states=return_mid_states,
             mid_layer_indices=mot_cfg.get("mid_layer_indices", None),
         )
@@ -612,6 +761,9 @@ class FastWAM(torch.nn.Module):
         pred_video = self.video_expert.post_dit(tokens_out["video"], video_pre)
 
         pred_action = self.action_expert.post_dit(tokens_out["action"], action_pre)
+        pred_grid = None
+        if grid_pre is not None:
+            pred_grid = self.grid_expert.post_dit(tokens_out["grid"], grid_pre)
 
         include_initial_video_step = inputs["first_frame_latents"] is None
         if inputs["first_frame_latents"] is not None:
@@ -654,6 +806,26 @@ class FastWAM(torch.nn.Module):
             "ifwam/loss_mask_video_ratio": float(video_mask.float().mean().detach().item()),
             "ifwam/loss_mask_action_ratio": float(action_mask.float().mean().detach().item()),
         }
+        if pred_grid is not None and target_grid is not None and grid_shape is not None:
+            num_windows, gh, gw = grid_shape
+            pred_grid_view = pred_grid.view(batch_size, num_windows, gh, gw, self.grid_flow_dim)
+            target_grid_view = target_grid.view(batch_size, num_windows, gh, gw, self.grid_flow_dim)
+            grid_loss_per_sample = self._grid_flow_loss_per_sample(
+                pred_grid=pred_grid_view,
+                target_grid=target_grid_view,
+                grid_valid=grid_valid,
+                grid_quality=grid_quality,
+            )
+            grid_weight = self.train_grid_scheduler.training_weight(timestep_grid).to(
+                grid_loss_per_sample.device, dtype=grid_loss_per_sample.dtype
+            )
+            grid_mask = self._loss_mask_value(loss_mask, "gridflow", grid_loss_per_sample.device, grid_loss_per_sample.dtype, batch_size, default=1.0)
+            loss_grid_fm = self._masked_weighted_mean(grid_loss_per_sample, grid_weight, grid_mask)
+            loss_total = loss_total + self.loss_lambda_gridflow_fm * loss_grid_fm
+            loss_dict["loss_gridflow_fm"] = float(loss_grid_fm.detach().item())
+            loss_dict["unweighted_gridflow_fm_loss"] = float(loss_grid_fm.detach().item())
+            loss_dict["weighted_gridflow_fm_loss"] = self.loss_lambda_gridflow_fm * float(loss_grid_fm.detach().item())
+            loss_dict["ifwam/loss_mask_gridflow_ratio"] = float(grid_mask.float().mean().detach().item())
 
         if self.ifwam_enabled and self.process_flow_readout is not None and mid_states is not None:
             target_flow = sample.get("iflow_teacher")
