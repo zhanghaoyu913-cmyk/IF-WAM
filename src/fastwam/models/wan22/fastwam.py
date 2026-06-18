@@ -570,18 +570,16 @@ class FastWAM(torch.nn.Module):
         # action -> action
         mask[action_start:, action_start:] = True
         if grid_seq_len > 0:
-            # Action token t can condition on video/grid prefixes aligned to its
-            # action segment.  Action self-attention remains unchanged from
-            # Fast-WAM because action diffusion denoises the full horizon jointly.
-            grid_tokens_per_window = max(1, grid_seq_len // max(1, self.grid_flow_num_windows))
+            # Grid flow is a training-time auxiliary modality for shaping the
+            # video-side representation.  Action tokens condition on aligned
+            # video prefixes only; they never attend to grid tokens, so
+            # inference does not depend on a teacher-only input.
             action_segment_len = max(1, action_seq_len // max(1, self.grid_flow_num_windows))
             for a_idx in range(action_seq_len):
                 action_window = min(a_idx // action_segment_len, self.grid_flow_num_windows - 1)
                 visible_video_tokens = min(video_seq_len, (action_window + 2) * video_tokens_per_frame)
-                visible_grid_tokens = min(grid_seq_len, (action_window + 1) * grid_tokens_per_window)
                 row = action_start + a_idx
                 mask[row, :visible_video_tokens] = True
-                mask[row, grid_start:grid_start + visible_grid_tokens] = True
         else:
             # Legacy Fast-WAM action denoising only sees first-frame video.
             first_frame_tokens = min(video_tokens_per_frame, video_seq_len)
