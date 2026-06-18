@@ -10,6 +10,7 @@ from ifwam.models import FlowScoringHead, ProcessFlowReadout
 from ifwam.losses.process_flow_losses import action_flow_loss, flow_score_loss, grid_flow_loss, video_flow_loss
 
 from .action_dit import ActionDiT
+from .grid_flow_dit import GridFlowDiT
 from .helpers.loader import load_wan22_ti2v_5b_components
 from .mot import MoT
 from .schedulers.scheduler_continuous import WanContinuousFlowMatchScheduler
@@ -260,9 +261,12 @@ class FastWAM(torch.nn.Module):
         grid_expert = None
         if bool(gridfm_cfg.get("enabled", False)):
             grid_dit_config = dict(action_dit_config)
-            grid_dit_config["action_dim"] = int(gridfm_cfg.get("flow_dim", 3))
-            grid_expert = ActionDiT.from_pretrained(
-                action_dit_config=grid_dit_config,
+            grid_dit_config.pop("action_dim", None)
+            grid_dit_config["flow_dim"] = int(gridfm_cfg.get("flow_dim", 3))
+            grid_dit_config["num_flow_windows"] = int(gridfm_cfg.get("num_flow_windows", 2))
+            grid_dit_config["grid_size"] = tuple(int(v) for v in gridfm_cfg.get("grid_size", (8, 8)))
+            grid_expert = GridFlowDiT.from_action_pretrained(
+                grid_dit_config=grid_dit_config,
                 action_dit_pretrained_path=action_dit_pretrained_path,
                 skip_dit_load_from_pretrain=skip_dit_load_from_pretrain,
                 device=device,
@@ -699,7 +703,7 @@ class FastWAM(torch.nn.Module):
         )
         if self.grid_flow_matching_enabled:
             grid_pre = self.grid_expert.pre_dit(
-                action_tokens=noisy_grid,
+                grid_tokens=noisy_grid,
                 timestep=timestep_grid,
                 context=context,
                 context_mask=context_mask,

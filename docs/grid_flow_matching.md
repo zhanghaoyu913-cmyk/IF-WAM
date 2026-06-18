@@ -7,7 +7,12 @@ This worktree implements a separate IF-WAM variant where grid flow is trained as
 - Training uses video, grid, and action tokens in the MoT stack.
 - Grid flow teacher is loaded from the existing manifest `grid_flow_teacher`.
 - Grid flow is noised with an independent continuous flow-matching scheduler.
-- The grid expert predicts the grid denoising target and contributes `lambda_gridflow_fm * loss_gridflow_fm`.
+- The grid expert is `GridFlowDiT`. It predicts the grid denoising target and
+  contributes `lambda_gridflow_fm * loss_gridflow_fm`.
+- `GridFlowDiT` uses grid-specific `grid_encoder`, `grid_head`, and
+  `grid_position_embedding`. Its text/time/transformer backbone can still load
+  the existing ActionDiT backbone checkpoint; only the grid-specific input,
+  output, and position layers stay randomly initialized.
 - Action tokens do not attend to grid tokens. Grid flow shapes the video-side
   representation through video-grid interaction, not by providing a teacher-only
   action input.
