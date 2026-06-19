@@ -18,6 +18,7 @@ This worktree implements a separate IF-WAM variant where grid flow is trained as
   action input.
 - The old `ProcessFlowReadout` and `FlowScoringHead` are disabled in the new configs.
 - Inference remains the original Fast-WAM/IF-WAM action inference path: first-frame video plus action diffusion. It does not require, create, expose, or consume grid flow.
+- The queue grounds and evaluates the GridFM checkpoints with the corrected raw/full LIBERO 2cam pipeline, not the older manifest-only grounding path.
 
 ## Masking
 

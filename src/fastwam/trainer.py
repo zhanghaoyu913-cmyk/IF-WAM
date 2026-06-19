@@ -482,7 +482,7 @@ class Wan22Trainer:
         model.requires_grad_(False)
         model.dit.train()
         model.dit.requires_grad_(True)
-        for name in ("proprio_encoder", "process_flow_readout", "flow_scoring_head"):
+        for name in ("proprio_encoder", "process_flow_readout", "flow_scoring_head", "grid_expert"):
             module = getattr(model, name, None)
             if module is not None:
                 module.train()
@@ -491,7 +491,7 @@ class Wan22Trainer:
     @staticmethod
     def _collect_trainable_params(model):
         modules = [model.dit]
-        for name in ("proprio_encoder", "process_flow_readout", "flow_scoring_head"):
+        for name in ("proprio_encoder", "process_flow_readout", "flow_scoring_head", "grid_expert"):
             module = getattr(model, name, None)
             if module is not None:
                 modules.append(module)

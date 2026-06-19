@@ -8,7 +8,7 @@ SEED="${SEED:-0}"
 WANDB_ENABLED="${WANDB_ENABLED:-true}"
 LOG_ROOT="${LOG_ROOT:-${ROOT}/runs/gridfm_denoisy_queue/logs}"
 RUN_TAG="${RUN_TAG:-gridfm_denoisy_seed${SEED}}"
-WAIT_FOR_TMUX_SESSIONS="${WAIT_FOR_TMUX_SESSIONS:-current_subsampled_train fastwam_singleview_eval_v2 libero_test_v3}"
+WAIT_FOR_TMUX_SESSIONS="${WAIT_FOR_TMUX_SESSIONS:-corrected_current_subsampled current_subsampled_train fastwam_singleview_eval_v2 libero_test_v3}"
 WAIT_POLL_SECONDS="${WAIT_POLL_SECONDS:-300}"
 
 mkdir -p "${LOG_ROOT}"
@@ -113,14 +113,17 @@ wait_for_tmux_sessions
 run_stage "ifwam_libero_gridfm_pretrain_20k" "ifwam_libero_gridfm_pretrain_20k" 20000 ""
 libero_pretrain_dir="$(run_dir_for "ifwam_libero_gridfm_pretrain_20k" "${RUN_TAG}_ifwam_libero_gridfm_pretrain_20k")"
 libero_pretrain_ckpt="${libero_pretrain_dir}/checkpoints/weights/$(step_tag 20000)"
-run_stage "ifwam_libero_gridfm_grounding_2k" "ifwam_libero_gridfm_grounding_2k" 2000 "${libero_pretrain_ckpt}"
+run_stage "ifwam_libero_gridfm_raw_grounding_2k" "ifwam_libero_gridfm_raw_grounding_2k" 2000 "${libero_pretrain_ckpt}"
 
 run_stage "ifwam_mixed_gridfm_pretrain_20k" "ifwam_mixed_gridfm_pretrain_20k" 20000 ""
 mixed_pretrain_dir="$(run_dir_for "ifwam_mixed_gridfm_pretrain_20k" "${RUN_TAG}_ifwam_mixed_gridfm_pretrain_20k")"
 mixed_pretrain_ckpt="${mixed_pretrain_dir}/checkpoints/weights/$(step_tag 20000)"
-run_stage "ifwam_mixed_gridfm_grounding_2k" "ifwam_mixed_gridfm_grounding_2k" 2000 "${mixed_pretrain_ckpt}"
+run_stage "ifwam_mixed_gridfm_raw_grounding_2k" "ifwam_mixed_gridfm_raw_grounding_2k" 2000 "${mixed_pretrain_ckpt}"
+
+echo "[gridfm-queue] start raw/full LIBERO eval"
+RUN_TAG="${RUN_TAG}" bash scripts/run_gridfm_raw_libero_eval_queue.sh
 
 echo "[gridfm-queue] complete GridFM denoisy training seed=${SEED}"
 echo "[gridfm-queue] final checkpoints:"
-echo "  ifwam_libero_gridfm: $(run_dir_for "ifwam_libero_gridfm_grounding_2k" "${RUN_TAG}_ifwam_libero_gridfm_grounding_2k")/checkpoints/weights/final.pt"
-echo "  ifwam_mixed_gridfm: $(run_dir_for "ifwam_mixed_gridfm_grounding_2k" "${RUN_TAG}_ifwam_mixed_gridfm_grounding_2k")/checkpoints/weights/final.pt"
+echo "  ifwam_libero_gridfm: $(run_dir_for "ifwam_libero_gridfm_raw_grounding_2k" "${RUN_TAG}_ifwam_libero_gridfm_raw_grounding_2k")/checkpoints/weights/final.pt"
+echo "  ifwam_mixed_gridfm: $(run_dir_for "ifwam_mixed_gridfm_raw_grounding_2k" "${RUN_TAG}_ifwam_mixed_gridfm_raw_grounding_2k")/checkpoints/weights/final.pt"
