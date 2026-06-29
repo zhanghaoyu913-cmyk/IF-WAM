@@ -401,3 +401,82 @@ def test_cross_attn_decoder_detach_action_context_blocks_action_grad():
     assert action_grad is None
     assert head_grad.abs().sum().item() > 0.0
     assert sum(g.abs().sum().item() for g in dec_grads) > 0.0
+
+
+def test_cross_attn_decoder_uses_timestep_conditioning():
+    torch.manual_seed(345)
+    decoder = GridAuxCrossAttentionDecoder(
+        grid_dim=8,
+        video_dim=6,
+        action_dim=5,
+        num_heads=2,
+        num_layers=1,
+        ffn_dim=16,
+        dropout=0.0,
+    )
+    decoder.eval()
+    grid = torch.randn(2, 4, 8)
+    video = torch.randn(2, 3, 6)
+    text = torch.randn(2, 3, 8)
+    t0 = torch.randn(2, 8)
+    t1 = torch.randn(2, 8)
+    out0 = decoder(grid, video, text_context=text, text_mask=torch.ones(2, 4, 3, dtype=torch.bool), time_embedding=t0)
+    out1 = decoder(grid, video, text_context=text, text_mask=torch.ones(2, 4, 3, dtype=torch.bool), time_embedding=t1)
+    assert (out0 - out1).abs().max().item() > 1e-5
+
+
+def test_cross_attn_decoder_invalid_tokens_not_visible_to_valid_tokens():
+    torch.manual_seed(456)
+    decoder = GridAuxCrossAttentionDecoder(
+        grid_dim=8,
+        video_dim=6,
+        action_dim=5,
+        num_heads=2,
+        num_layers=1,
+        ffn_dim=16,
+        dropout=0.0,
+    )
+    decoder.eval()
+    grid = torch.randn(1, 4, 8)
+    grid_poisoned = grid.clone()
+    grid_poisoned[:, 2:] = 1.0e6
+    video = torch.randn(1, 3, 6)
+    text = torch.randn(1, 3, 8)
+    gate = torch.tensor([[1.0, 1.0, 0.0, 0.0]])
+    kwargs = dict(
+        video_hidden=video,
+        text_context=text,
+        text_mask=torch.ones(1, 4, 3, dtype=torch.bool),
+        token_gate=gate,
+        time_embedding=torch.randn(1, 8),
+    )
+    out = decoder(grid_tokens=grid, **kwargs)
+    out_poisoned = decoder(grid_tokens=grid_poisoned, **kwargs)
+    assert torch.allclose(out[:, :2], out_poisoned[:, :2], atol=1e-5, rtol=1e-5)
+
+
+def test_cross_attn_decoder_all_invalid_is_finite_and_zero():
+    torch.manual_seed(567)
+    decoder = GridAuxCrossAttentionDecoder(
+        grid_dim=8,
+        video_dim=6,
+        action_dim=5,
+        num_heads=2,
+        num_layers=1,
+        ffn_dim=16,
+        dropout=0.0,
+    )
+    grid = torch.randn(2, 4, 8)
+    video = torch.randn(2, 3, 6)
+    text = torch.randn(2, 3, 8)
+    gate = torch.zeros(2, 4)
+    out = decoder(
+        grid_tokens=grid,
+        video_hidden=video,
+        text_context=text,
+        text_mask=torch.ones(2, 4, 3, dtype=torch.bool),
+        token_gate=gate,
+        time_embedding=torch.randn(2, 8),
+    )
+    assert torch.isfinite(out).all()
+    assert torch.allclose(out, torch.zeros_like(out), atol=1e-6, rtol=0.0)

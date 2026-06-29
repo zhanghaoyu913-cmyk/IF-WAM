@@ -53,6 +53,8 @@ class GridAuxCrossAttentionDecoder(nn.Module):
         self.action_norm = nn.LayerNorm(self.action_dim) if self.action_dim is not None else None
         self.action_proj = nn.Linear(self.action_dim, self.grid_dim) if self.action_dim is not None else None
         self.text_norm = nn.LayerNorm(self.grid_dim)
+        self.time_norm = nn.LayerNorm(self.grid_dim)
+        self.time_proj = nn.Linear(self.grid_dim, self.grid_dim)
         self.layers = nn.ModuleList()
         for _ in range(self.num_layers):
             self.layers.append(
@@ -92,6 +94,7 @@ class GridAuxCrossAttentionDecoder(nn.Module):
         text_mask: Optional[torch.Tensor] = None,
         action_hidden: Optional[torch.Tensor] = None,
         token_gate: Optional[torch.Tensor] = None,
+        time_embedding: Optional[torch.Tensor] = None,
     ) -> torch.Tensor:
         if grid_tokens.ndim != 3:
             raise ValueError(f"grid_tokens must be [B,S,D], got {tuple(grid_tokens.shape)}")
@@ -121,14 +124,27 @@ class GridAuxCrossAttentionDecoder(nn.Module):
         key_padding_mask = ~memory_valid.bool()
 
         x = self.grid_norm(grid_tokens)
+        if time_embedding is not None:
+            if time_embedding.ndim != 2 or time_embedding.shape != (batch_size, self.grid_dim):
+                raise ValueError(
+                    f"time_embedding must be [B,D]={batch_size, self.grid_dim}, got {tuple(time_embedding.shape)}"
+                )
+            time_vec = self.time_proj(self.time_norm(time_embedding.to(device=x.device, dtype=x.dtype)))
+            x = x + time_vec.unsqueeze(1)
+        grid_key_padding_mask = None
         if token_gate is not None:
             gate = token_gate.to(device=x.device, dtype=x.dtype)
             if gate.ndim != 2 or gate.shape != x.shape[:2]:
                 raise ValueError(f"token_gate must be [B,S]={tuple(x.shape[:2])}, got {tuple(gate.shape)}")
+            grid_key_padding_mask = ~(gate > 0)
+            all_invalid = grid_key_padding_mask.all(dim=1)
+            if all_invalid.any():
+                grid_key_padding_mask = grid_key_padding_mask.clone()
+                grid_key_padding_mask[all_invalid] = False
             x = x * gate.unsqueeze(-1)
         for layer in self.layers:
             y = layer["self_norm"](x)
-            y, _ = layer["self_attn"](y, y, y, need_weights=False)
+            y, _ = layer["self_attn"](y, y, y, key_padding_mask=grid_key_padding_mask, need_weights=False)
             x = x + y
             y = layer["cross_norm"](x)
             y, _ = layer["cross_attn"](y, memory, memory, key_padding_mask=key_padding_mask, need_weights=False)
@@ -1179,6 +1195,7 @@ class FastWAM(torch.nn.Module):
                         text_mask=grid_pre["context_mask"],
                         action_hidden=action_for_grid,
                         token_gate=grid_token_gate,
+                        time_embedding=grid_pre["t"] if self.grid_flow_input_mode == "noisy_teacher" else None,
                     )
                     tokens_out = dict(tokens_out)
                     tokens_out["grid"] = grid_decoded

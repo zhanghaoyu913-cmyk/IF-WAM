@@ -493,14 +493,22 @@ class Wan22Trainer:
     def _apply_dit_only_train_mode(model, trainable_scope: str = "dit"):
         model.eval()
         model.requires_grad_(False)
+        def _enable(module):
+            if module is not None:
+                module.train()
+                module.requires_grad_(True)
+
         if trainable_scope == "dit":
             model.dit.train()
             model.dit.requires_grad_(True)
             for name in ("proprio_encoder", "process_flow_readout", "flow_scoring_head", "grid_expert", "grid_aux_decoder"):
-                module = getattr(model, name, None)
-                if module is not None:
-                    module.train()
-                    module.requires_grad_(True)
+                _enable(getattr(model, name, None))
+            if getattr(model, "grid_aux_arch", None) == "cross_attn_decoder":
+                grid_expert = getattr(model, "grid_expert", None)
+                grid_blocks = getattr(grid_expert, "blocks", None) if grid_expert is not None else None
+                if grid_blocks is not None:
+                    grid_blocks.eval()
+                    grid_blocks.requires_grad_(False)
         elif trainable_scope == "action_head_only":
             action_expert = getattr(model, "action_expert", None)
             action_head = getattr(action_expert, "head", None) if action_expert is not None else None
@@ -508,6 +516,22 @@ class Wan22Trainer:
                 raise RuntimeError("trainable_scope=action_head_only requires model.action_expert.head.")
             action_head.train()
             action_head.requires_grad_(True)
+        elif trainable_scope == "action_adapter_only":
+            action_expert = getattr(model, "action_expert", None)
+            if action_expert is None:
+                raise RuntimeError("trainable_scope=action_adapter_only requires model.action_expert.")
+            selected = []
+            for name in ("action_encoder", "time_embedding", "time_projection", "head"):
+                module = getattr(action_expert, name, None)
+                if module is not None:
+                    selected.append(module)
+            proprio_encoder = getattr(model, "proprio_encoder", None)
+            if proprio_encoder is not None:
+                selected.append(proprio_encoder)
+            if not selected:
+                raise RuntimeError("trainable_scope=action_adapter_only found no action adapter modules.")
+            for module in selected:
+                _enable(module)
         else:
             raise ValueError(f"Unsupported trainable_scope={trainable_scope!r}")
 
