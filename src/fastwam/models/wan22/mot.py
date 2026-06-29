@@ -372,10 +372,10 @@ class MoT(nn.Module):
             raise ValueError(
                 f"`video_kv_cache` must contain {self.num_layers} layers, got {len(video_kv_cache)}."
             )
-        if attention_mask.ndim != 2:
-            raise ValueError(f"`attention_mask` must be 2D [S,S], got shape {tuple(attention_mask.shape)}")
-        if attention_mask.shape[0] != attention_mask.shape[1]:
-            raise ValueError(f"`attention_mask` must be square, got shape {tuple(attention_mask.shape)}")
+        if attention_mask.ndim not in (2, 4):
+            raise ValueError(f"`attention_mask` must be 2D [S,S] or 4D [B,1,S,S], got shape {tuple(attention_mask.shape)}")
+        if attention_mask.shape[-2] != attention_mask.shape[-1]:
+            raise ValueError(f"`attention_mask` must be square over the last two dims, got shape {tuple(attention_mask.shape)}")
 
         action_seq_len = int(action_tokens.shape[1])
         total_seq_len = int(video_seq_len) + action_seq_len
@@ -467,10 +467,10 @@ class MoT(nn.Module):
         if missing:
             raise ValueError(f"Missing expert t_mod for {missing}")
 
-        if attention_mask.ndim != 2:
-            raise ValueError(f"`attention_mask` must be 2D [S, S], got shape {tuple(attention_mask.shape)}")
-        if attention_mask.shape[0] != attention_mask.shape[1]:
-            raise ValueError(f"`attention_mask` must be square, got shape {tuple(attention_mask.shape)}")
+        if attention_mask.ndim not in (2, 4):
+            raise ValueError(f"`attention_mask` must be 2D [S,S] or 4D [B,1,S,S], got shape {tuple(attention_mask.shape)}")
+        if attention_mask.shape[-2] != attention_mask.shape[-1]:
+            raise ValueError(f"`attention_mask` must be square over the last two dims, got shape {tuple(attention_mask.shape)}")
 
         tokens_all = {k: v for k, v in embeds_all.items()}
         capture_layers = set(int(i) for i in (mid_layer_indices or []))
@@ -528,10 +528,10 @@ class MoT(nn.Module):
             v_cat = torch.cat(v_chunks, dim=1)
 
             total_seq = q_cat.shape[1]
-            if attention_mask.shape[0] != total_seq:
+            if attention_mask.shape[-1] != total_seq:
                 raise ValueError(
                     "Attention mask seq length mismatch: "
-                    f"mask={attention_mask.shape[0]} vs tokens={total_seq}"
+                    f"mask={attention_mask.shape[-1]} vs tokens={total_seq}"
                 )
 
             mixed = self._mixed_attention(q_cat=q_cat, k_cat=k_cat, v_cat=v_cat, attention_mask=attention_mask)

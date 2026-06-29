@@ -1,0 +1,30 @@
+# @package _global_
+defaults:
+  - ifwam_libero_gridfm_pretrain_20k
+  - _self_
+
+seed: 0
+max_steps: 5000
+save_every: 0
+save_weights_every: 0
+save_weights_steps: [1000, 5000]
+save_state_every: 0
+save_final_state: false
+eval_every: 0
+expected_global_batch_size: 32
+resume: null
+
+model:
+  ifwam:
+    enabled: false
+
+ifwam:
+  ifwam:
+    enabled: false
+    grid_flow_matching:
+      enabled: false
+
+data:
+  train:
+    manifest_path: /2024233240/if-wam_incoming/ifwam_data/manifests/dense_ablation/train_libero_dense_f4_s1_grid_rgb.jsonl
+    enable_gridflow_teacher: true

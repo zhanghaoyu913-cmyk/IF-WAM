@@ -1,0 +1,8 @@
+# @package _global_
+defaults:
+  - mixed_best_aux_compute_matched
+  - _self_
+
+# Placeholder for LIBERO exposure matched runs. Set max_steps to
+# ceil(libero_only_steps / observed_p_libero) after sampler exposure audit.
+max_steps: 50000

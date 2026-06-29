@@ -1,0 +1,26 @@
+# @package _global_
+defaults:
+  - ifwam_libero_gridfm_pretrain_20k
+  - _self_
+
+seed: 0
+max_steps: 20000
+expected_global_batch_size: 32
+learning_rate: 1.0e-4
+resume: null
+
+ifwam:
+  ifwam:
+    grid_flow_matching:
+      enabled: true
+      interaction_mode: one_way_aux
+      input_mode: noisy_teacher
+      target_mode: direction_presence
+      quality_application: loss_only
+      lambda_gridflow_fm: 0.1
+      direction_loss_weight: 1.0
+      presence_loss_weight: 1.0
+      min_motion_threshold: 1.0e-3
+      move_threshold_mad_scale: 3.0
+      expected_libero_samples_seen: 640000
+      expected_grid_valid_samples_seen: 640000

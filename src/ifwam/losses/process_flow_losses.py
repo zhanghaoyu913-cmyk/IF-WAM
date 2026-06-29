@@ -6,6 +6,8 @@ from typing import Any, Mapping, Optional
 import torch
 import torch.nn.functional as F
 
+from ifwam.gridflow_utils import adaptive_moving_mask_torch
+
 AGENT_IDX = 0
 TARGET_IDX = 1
 REL_IDX = 2
@@ -254,25 +256,24 @@ def grid_flow_loss(pred_grid_flow, pred_motion_logit, target_grid_flow, grid_val
         move_threshold = target_norm.new_full(
             target_norm.shape[:2], float(_cfg_get(gcfg, "move_threshold", 1e-4))
         )
+        moving_gt = (target_norm > move_threshold[..., None, None]).to(dtype=pred_grid_flow.dtype)
     elif threshold_mode == "adaptive_mad":
-        flat_norm = target_norm.float().flatten(start_dim=2)
-        flat_valid = valid.bool().flatten(start_dim=2)
-        nan = torch.full_like(flat_norm, float("nan"))
-        masked_norm = torch.where(flat_valid, flat_norm, nan)
-        median = torch.nanmedian(masked_norm, dim=-1).values
-        abs_dev = torch.abs(flat_norm - median.unsqueeze(-1))
-        masked_dev = torch.where(flat_valid, abs_dev, nan)
-        mad = torch.nanmedian(masked_dev, dim=-1).values
         threshold_min = float(_cfg_get(gcfg, "move_threshold_min", 1e-3))
         mad_scale = float(_cfg_get(gcfg, "move_threshold_mad_scale", 3.0))
-        move_threshold = torch.nan_to_num(median + mad_scale * mad, nan=threshold_min).clamp_min(threshold_min)
+        moving_gt, move_threshold = adaptive_moving_mask_torch(
+            target_grid_flow,
+            valid,
+            min_motion_threshold=threshold_min,
+            mad_scale=mad_scale,
+        )
         threshold_max = _cfg_get(gcfg, "move_threshold_max", None)
         if threshold_max is not None:
             move_threshold = move_threshold.clamp_max(float(threshold_max))
-        move_threshold = move_threshold.to(dtype=target_norm.dtype)
+            moving_gt = ((target_norm > move_threshold[..., None, None]) & valid.bool()).to(dtype=pred_grid_flow.dtype)
+        else:
+            moving_gt = moving_gt.to(dtype=pred_grid_flow.dtype)
     else:
         raise ValueError(f"Unsupported grid move_threshold_mode={threshold_mode!r}")
-    moving_gt = (target_norm > move_threshold[..., None, None]).to(dtype=pred_grid_flow.dtype)
     q = grid_quality.to(device=pred_grid_flow.device, dtype=pred_grid_flow.dtype)
     while q.ndim < valid.ndim:
         q = q.unsqueeze(-1)

@@ -1,0 +1,35 @@
+# @package _global_
+defaults:
+  - ifwam_mixed_gridfm_pretrain_20k
+  - _self_
+
+seed: 0
+max_steps: 20000
+expected_global_batch_size: 32
+learning_rate: 1.0e-4
+resume: null
+
+ifwam:
+  ifwam:
+    grid_flow_matching:
+      enabled: true
+      interaction_mode: one_way_aux
+      input_mode: noisy_teacher
+      target_mode: direction_presence
+      quality_application: loss_only
+      lambda_gridflow_fm: 0.1
+      direction_loss_weight: 1.0
+      presence_loss_weight: 1.0
+      expected_libero_samples_seen: 320000
+      expected_grid_valid_samples_seen: 320000
+
+data:
+  train:
+    sampler_group_sampling: source_weighted
+    sampler_source_weights:
+      LIBERO-Spatial: 1.0
+      LIBERO-Object: 1.0
+      LIBERO-Goal: 1.0
+      LIBERO-10: 1.0
+      EgoDex: 1.0
+      BridgeDataV2: 1.0

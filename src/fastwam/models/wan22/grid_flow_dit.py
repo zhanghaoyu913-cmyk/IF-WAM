@@ -22,7 +22,7 @@ class GridFlowDiT(nn.Module):
     GridFM training.
     """
 
-    GRID_BACKBONE_SKIP_PREFIXES = ("grid_encoder.", "grid_head.", "grid_position_embedding")
+    GRID_BACKBONE_SKIP_PREFIXES = ("grid_encoder.", "grid_head.", "presence_head.", "grid_position_embedding", "learned_query_embedding")
     GRID_BACKBONE_META_KEYS = (
         "hidden_dim",
         "ffn_dim",
@@ -47,6 +47,8 @@ class GridFlowDiT(nn.Module):
         num_layers: int,
         num_flow_windows: int = 2,
         grid_size: tuple[int, int] | list[int] = (8, 8),
+        predict_presence: bool = False,
+        learned_query: bool = False,
         use_gradient_checkpointing: bool = False,
     ):
         super().__init__()
@@ -96,8 +98,10 @@ class GridFlowDiT(nn.Module):
             ]
         )
         self.grid_head = nn.Linear(self.hidden_dim, self.flow_dim)
+        self.presence_head = nn.Linear(self.hidden_dim, 1) if bool(predict_presence) else None
         grid_seq_len = self.num_flow_windows * self.grid_size[0] * self.grid_size[1]
         self.grid_position_embedding = nn.Parameter(torch.zeros(1, grid_seq_len, self.hidden_dim))
+        self.learned_query_embedding = nn.Parameter(torch.zeros(1, grid_seq_len, self.hidden_dim)) if bool(learned_query) else None
         self.freqs = precompute_freqs_cis(self.attn_head_dim, end=1024)
         self.use_gradient_checkpointing = bool(use_gradient_checkpointing)
 
@@ -231,6 +235,8 @@ class GridFlowDiT(nn.Module):
         timestep: torch.Tensor,
         context: torch.Tensor,
         context_mask: Optional[torch.Tensor] = None,
+        token_gate: Optional[torch.Tensor] = None,
+        use_learned_query: bool = False,
     ) -> Dict[str, Any]:
         if grid_tokens.ndim != 3:
             raise ValueError(f"`grid_tokens` must be 3D [B, S, flow_dim], got shape {tuple(grid_tokens.shape)}")
@@ -273,8 +279,20 @@ class GridFlowDiT(nn.Module):
 
         t = self.time_embedding(sinusoidal_embedding_1d(self.freq_dim, timestep))
         t_mod = self.time_projection(t).unflatten(1, (6, self.hidden_dim))
-        tokens = self.grid_encoder(grid_tokens)
+        if use_learned_query:
+            if self.learned_query_embedding is None:
+                raise RuntimeError("GridFlowDiT learned query embedding is not enabled.")
+            tokens = self.learned_query_embedding[:, :seq_len].expand(batch_size, -1, -1).to(device=grid_tokens.device, dtype=grid_tokens.dtype)
+        else:
+            tokens = self.grid_encoder(grid_tokens)
         tokens = tokens + self.grid_position_embedding[:, :seq_len].to(device=tokens.device, dtype=tokens.dtype)
+        if token_gate is not None:
+            gate = token_gate.to(device=tokens.device, dtype=tokens.dtype)
+            if gate.ndim != 2 or gate.shape != (batch_size, seq_len):
+                raise ValueError(
+                    f"`token_gate` must be [B,S]={batch_size, seq_len}, got {tuple(gate.shape)}"
+                )
+            tokens = tokens * gate.unsqueeze(-1)
         context_emb = self.text_embedding(context)
         context_attn_mask = context_mask.unsqueeze(1).expand(-1, seq_len, -1)
         freqs = self.freqs[:seq_len].view(seq_len, 1, -1).to(tokens.device)
@@ -297,6 +315,11 @@ class GridFlowDiT(nn.Module):
     def post_dit(self, tokens: torch.Tensor, pre_state: Dict[str, Any]) -> torch.Tensor:
         del pre_state
         return self.grid_head(tokens)
+
+    def post_presence(self, tokens: torch.Tensor) -> torch.Tensor:
+        if self.presence_head is None:
+            raise RuntimeError("GridFlowDiT presence head is not enabled.")
+        return self.presence_head(tokens).squeeze(-1)
 
     def forward(
         self,

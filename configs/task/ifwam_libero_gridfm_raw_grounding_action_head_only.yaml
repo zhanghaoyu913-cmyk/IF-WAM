@@ -1,0 +1,6 @@
+# @package _global_
+defaults:
+  - ifwam_libero_gridfm_raw_grounding_curve
+  - _self_
+
+trainable_scope: action_head_only

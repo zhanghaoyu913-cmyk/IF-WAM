@@ -24,6 +24,7 @@ log_every: 10
 save_every: 100
 # Lightweight model weights are useful for evaluation; full DeepSpeed states include optimizer shards and are much larger.
 save_weights_every: null
+save_weights_steps: null
 save_state_every: null
 save_final_state: true
 eval_every: 50

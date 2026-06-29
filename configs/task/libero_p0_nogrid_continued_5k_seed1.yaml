@@ -1,0 +1,6 @@
+# @package _global_
+defaults:
+  - libero_p0_nogrid_continued_5k
+  - _self_
+
+seed: 1

@@ -15,6 +15,7 @@ from .trainer import Wan22Trainer
 from .utils.logging_config import get_logger, setup_logging
 from .utils.video_io import save_mp4
 from .utils import misc
+from .utils.run_artifacts import write_run_artifacts
 
 logger = get_logger(__name__)
 
@@ -365,10 +366,25 @@ def run_training(cfg: DictConfig):
     )
     misc.register_work_dir(cfg.output_dir)
     config_payload = OmegaConf.to_container(cfg, resolve=True)
+    Path(cfg.output_dir).mkdir(parents=True, exist_ok=True)
     with open(Path(cfg.output_dir) / "config.yaml", "w") as f:
         OmegaConf.save(config_payload, f)
-    with open(Path(cfg.output_dir) / "resolved_config.yaml", "w") as f:
-        OmegaConf.save(config_payload, f)
+    manifest_path = None
+    try:
+        manifest_path = cfg.data.train.manifest_path
+    except Exception:
+        manifest_path = None
+    write_run_artifacts(
+        cfg.output_dir,
+        config=config_payload,
+        manifest_path=manifest_path,
+        checkpoint_path=cfg.get("resume"),
+        extra={"entrypoint": "scripts/train.py"},
+        repos=[
+            Path(__file__).resolve().parents[3],
+            "/2024233240/if-wam_incoming/AutoLabel-3D_Affordance_Flow",
+        ],
+    )
 
     model_device = _resolve_train_device()
     mixed_precision = _normalize_mixed_precision(cfg.mixed_precision)

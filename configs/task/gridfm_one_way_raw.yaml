@@ -1,0 +1,21 @@
+# @package _global_
+defaults:
+  - ifwam_libero_gridfm_pretrain_20k
+  - _self_
+
+seed: 0
+max_steps: 20000
+expected_global_batch_size: 32
+learning_rate: 1.0e-4
+resume: null
+
+ifwam:
+  ifwam:
+    grid_flow_matching:
+      enabled: true
+      interaction_mode: one_way_aux
+      target_mode: raw_vector_fm
+      quality_input_gate: true
+      lambda_gridflow_fm: 0.1
+      expected_libero_samples_seen: 640000
+      expected_grid_valid_samples_seen: 640000

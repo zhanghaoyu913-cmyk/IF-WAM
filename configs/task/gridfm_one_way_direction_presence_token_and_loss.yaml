@@ -1,0 +1,9 @@
+# @package _global_
+defaults:
+  - gridfm_one_way_direction_presence
+  - _self_
+
+ifwam:
+  ifwam:
+    grid_flow_matching:
+      quality_application: token_and_loss

@@ -1,0 +1,11 @@
+# @package _global_
+defaults:
+  - original_readout_5k
+  - _self_
+
+ifwam:
+  ifwam:
+    grid_flow_matching:
+      enabled: false
+    losses:
+      lambda_gridflow: 0.03

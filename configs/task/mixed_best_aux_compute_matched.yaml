@@ -1,0 +1,11 @@
+# @package _global_
+defaults:
+  - mixed_gridfm_one_way_direction_presence
+  - _self_
+
+ifwam:
+  ifwam:
+    grid_flow_matching:
+      input_mode: learned_query
+      target_mode: direction_presence
+      quality_application: loss_only

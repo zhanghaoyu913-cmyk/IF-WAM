@@ -46,12 +46,14 @@ class Wan22Trainer:
         self.log_every = int(cfg.log_every)
         self.save_every = int(cfg.save_every)
         self.save_weights_every = self._resolve_interval_cfg("save_weights_every", fallback=self.save_every)
+        self.save_weights_steps = self._resolve_steps_cfg("save_weights_steps")
         self.save_state_every = self._resolve_interval_cfg("save_state_every", fallback=self.save_every)
         self.save_final_state = bool(cfg.get("save_final_state", True))
         self.eval_every = int(cfg.eval_every)
         self.eval_num_inference_steps = int(cfg.eval_num_inference_steps)
         self.gradient_accumulation_steps = int(cfg.gradient_accumulation_steps)
         self.max_grad_norm = float(cfg.max_grad_norm)
+        self.trainable_scope = str(cfg.get("trainable_scope", "dit"))
         self.expected_global_batch_size = cfg.get("expected_global_batch_size", None)
         self.seed = int(cfg.seed)
         
@@ -118,7 +120,7 @@ class Wan22Trainer:
 
         # Freeze non-trainable modules before optimizer/deepspeed initialization.
         # DiT and optional IF-WAM side heads remain trainable.
-        self._apply_dit_only_train_mode(self.model)
+        self._apply_dit_only_train_mode(self.model, trainable_scope=self.trainable_scope)
         trainable_params = self._collect_trainable_params(self.model)
         self.optimizer = torch.optim.AdamW(
             trainable_params,
@@ -173,6 +175,16 @@ class Wan22Trainer:
         if value is None or str(value).strip().lower() in {"", "none", "null"}:
             return int(fallback)
         return int(value)
+
+    def _resolve_steps_cfg(self, name: str) -> set[int]:
+        value = self.cfg.get(name, None)
+        if value is None or str(value).strip().lower() in {"", "none", "null"}:
+            return set()
+        if isinstance(value, str):
+            items = [part.strip() for part in value.split(",") if part.strip()]
+        else:
+            items = list(value)
+        return {int(item) for item in items}
 
     def _should_run_interval(self, interval: int) -> bool:
         return interval > 0 and self.global_step > 0 and self.global_step % interval == 0
@@ -308,6 +320,7 @@ class Wan22Trainer:
             "drop_last": bool(getattr(self.train_sampler, "drop_last", False)),
             "shuffle": bool(getattr(self.train_sampler, "shuffle", False)),
             "group_sampling": str(getattr(self.train_sampler, "group_sampling", "unknown")),
+            "source_weights": self.train_sampler.effective_source_weights() if hasattr(self.train_sampler, "effective_source_weights") else {},
             "num_batches_per_epoch": int(len(self.train_sampler)) if hasattr(self.train_sampler, "__len__") else None,
             "group_counts": self.train_sampler.group_counts() if hasattr(self.train_sampler, "group_counts") else {},
         }
@@ -472,26 +485,36 @@ class Wan22Trainer:
 
     def _set_dit_only_train_mode(self):
         # Match DiffSynth's freeze_except("dit"): only DiT stays trainable/in-train-mode.
-        logger.info("Setting DiT to train mode and freezing other model components.")
+        logger.info("Setting trainable_scope=%s and freezing other model components.", self.trainable_scope)
         model = self.accelerator.unwrap_model(self.model)
-        self._apply_dit_only_train_mode(model)
+        self._apply_dit_only_train_mode(model, trainable_scope=self.trainable_scope)
 
     @staticmethod
-    def _apply_dit_only_train_mode(model):
+    def _apply_dit_only_train_mode(model, trainable_scope: str = "dit"):
         model.eval()
         model.requires_grad_(False)
-        model.dit.train()
-        model.dit.requires_grad_(True)
-        for name in ("proprio_encoder", "process_flow_readout", "flow_scoring_head", "grid_expert"):
-            module = getattr(model, name, None)
-            if module is not None:
-                module.train()
-                module.requires_grad_(True)
+        if trainable_scope == "dit":
+            model.dit.train()
+            model.dit.requires_grad_(True)
+            for name in ("proprio_encoder", "process_flow_readout", "flow_scoring_head", "grid_expert", "grid_aux_decoder"):
+                module = getattr(model, name, None)
+                if module is not None:
+                    module.train()
+                    module.requires_grad_(True)
+        elif trainable_scope == "action_head_only":
+            action_expert = getattr(model, "action_expert", None)
+            action_head = getattr(action_expert, "head", None) if action_expert is not None else None
+            if action_head is None:
+                raise RuntimeError("trainable_scope=action_head_only requires model.action_expert.head.")
+            action_head.train()
+            action_head.requires_grad_(True)
+        else:
+            raise ValueError(f"Unsupported trainable_scope={trainable_scope!r}")
 
     @staticmethod
     def _collect_trainable_params(model):
         modules = [model.dit]
-        for name in ("proprio_encoder", "process_flow_readout", "flow_scoring_head", "grid_expert"):
+        for name in ("action_expert", "proprio_encoder", "process_flow_readout", "flow_scoring_head", "grid_expert", "grid_aux_decoder"):
             module = getattr(model, name, None)
             if module is not None:
                 modules.append(module)
@@ -960,6 +983,14 @@ class Wan22Trainer:
 
                         total_samples_seen = int(self.global_step * self.global_batch_size)
                         effective_epoch = float(total_samples_seen / max(len(self.train_dataset), 1))
+                        unweighted_grid_loss = float(global_loss_metrics.get(
+                            "unweighted_gridflow_loss",
+                            global_loss_metrics.get("unweighted_gridflow_fm_loss", global_loss_metrics.get("loss_grid_raw", 0.0)),
+                        ))
+                        weighted_grid_loss = float(global_loss_metrics.get(
+                            "weighted_gridflow_loss",
+                            global_loss_metrics.get("weighted_gridflow_fm_loss", global_loss_metrics.get("loss_grid_scaled", 0.0)),
+                        ))
                         train_metrics_payload = {
                             "global_step": int(self.global_step),
                             "global_batch_size": int(self.global_batch_size),
@@ -971,12 +1002,31 @@ class Wan22Trainer:
                             "action_mask_fraction": float(global_loss_metrics.get("ifwam/loss_mask_action_ratio", 0.0)),
                             "gridflow_mask_fraction": float(global_loss_metrics.get("ifwam/loss_mask_gridflow_ratio", 0.0)),
                             "unweighted_action_loss": float(global_loss_metrics.get("unweighted_action_loss", 0.0)),
-                            "unweighted_gridflow_loss": float(global_loss_metrics.get("unweighted_gridflow_loss", 0.0)),
+                            "unweighted_gridflow_loss": unweighted_grid_loss,
                             "weighted_action_loss": float(global_loss_metrics.get("weighted_action_loss", 0.0)),
-                            "weighted_gridflow_loss": float(global_loss_metrics.get("weighted_gridflow_loss", 0.0)),
+                            "weighted_gridflow_loss": weighted_grid_loss,
                             "total_loss": float(global_loss_metrics.get("total_loss", global_loss)),
+                            "grad_norm": global_grad_norm,
                             "lr": current_lr,
                         }
+                        for key in (
+                            "action_prediction_norm",
+                            "action_target_norm",
+                            "loss_grid_raw",
+                            "loss_grid_scaled",
+                            "loss_grid_direction",
+                            "loss_grid_presence",
+                            "grid_teacher_sample_coverage",
+                            "grid_valid_cell_ratio",
+                            "grid_moving_cell_ratio",
+                            "grid_quality_mean",
+                            "grid_flow_norm_mean_moving",
+                            "grid_flow_norm_p50_moving",
+                            "grid_lambda_effective",
+                            "num_grid_tokens_valid",
+                        ):
+                            if key in global_loss_metrics:
+                                train_metrics_payload[key] = float(global_loss_metrics[key])
                         self._append_train_metrics(train_metrics_payload)
 
                         wandb_payload = {
@@ -1039,7 +1089,7 @@ class Wan22Trainer:
                                 eval_payload["eval/action_l1"] = float(metrics["action_l1"])
                             self._wandb_log(eval_payload)
 
-                    save_weights = self._should_run_interval(self.save_weights_every)
+                    save_weights = self._should_run_interval(self.save_weights_every) or self.global_step in self.save_weights_steps
                     save_state = self._should_run_interval(self.save_state_every)
                     if save_weights or save_state:
                         ckpt_info = self.save_checkpoint(save_weights=save_weights, save_state=save_state)

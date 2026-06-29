@@ -1,0 +1,45 @@
+# @package _global_
+defaults:
+  - ifwam_libero_grid_pretrain_20k
+  - _self_
+
+max_steps: 5000
+save_weights_steps: [1000, 5000]
+save_weights_every: 0
+save_state_every: 0
+save_final_state: false
+eval_every: 0
+seed: 0
+
+wandb:
+  group: libero-only-5k-readout
+
+ifwam:
+  ifwam:
+    grid_flow_matching:
+      enabled: false
+    process_flow_readout:
+      enabled: true
+      use_video_readout: true
+      use_action_readout: true
+      use_grid_readout: true
+    losses:
+      lambda_vflow: 0.0
+      lambda_aflow: 0.0
+      lambda_gridflow: 0.1
+      lambda_score: 0.0
+      gridflow:
+        w_presence: 1.0
+        w_dir: 1.0
+        w_smooth: 0.0
+        w_mag: 0.0
+        smoothness_type: l1
+        smoothness_mask_mode: both_valid
+        move_threshold_mode: adaptive_mad
+        move_threshold_min: 1.0e-3
+        move_threshold_mad_scale: 3.0
+        balanced_presence: true
+        presence_pos_weight: 1.0
+        presence_neg_weight: 0.25
+        presence_threshold: 0.5
+        move_threshold: 1.0e-4

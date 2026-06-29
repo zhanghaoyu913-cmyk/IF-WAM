@@ -57,6 +57,7 @@ class IFWAMManifestDataset(Dataset):
         sampler_group_sampling: str = "proportional_to_num_rows",
         sampler_shuffle: bool = True,
         sampler_drop_last: bool = True,
+        sampler_source_weights: dict[str, float] | None = None,
     ):
         self.manifest_path = Path(manifest_path)
         self.image_size = (int(image_size[0]), int(image_size[1]))
@@ -77,6 +78,7 @@ class IFWAMManifestDataset(Dataset):
         self.sampler_group_sampling = str(sampler_group_sampling)
         self.sampler_shuffle = bool(sampler_shuffle)
         self.sampler_drop_last = bool(sampler_drop_last)
+        self.sampler_source_weights = dict(sampler_source_weights or {})
         from .collate import collate_ifwam_batch
         self.collate_fn = collate_ifwam_batch
         if self.camera_mode not in {"concat", "stack"}:
@@ -270,7 +272,10 @@ class IFWAMManifestDataset(Dataset):
                 torch.zeros(self.num_flow_windows, dtype=torch.float32),
                 torch.tensor(0.0, dtype=torch.float32),
             )
-        path = traj_dir / "flow" / "grid_flow.npz"
+        path_value = row.get("grid_flow_path") or row.get("grid_flow_npz")
+        path = Path(path_value) if path_value else traj_dir / "flow" / "grid_flow.npz"
+        if not path.is_absolute():
+            path = traj_dir / path
         if not path.exists():
             loss_mask["gridflow"] = 0.0
             return (
@@ -280,7 +285,10 @@ class IFWAMManifestDataset(Dataset):
                 torch.tensor(0.0, dtype=torch.float32),
             )
         if float(loss_mask.get("gridflow", 0.0)) > 0.0:
-            meta_path = traj_dir / "flow" / "grid_flow_meta.json"
+            meta_value = row.get("grid_flow_meta_path") or row.get("grid_flow_meta")
+            meta_path = Path(meta_value) if meta_value else path.with_name("grid_flow_meta.json")
+            if not meta_path.is_absolute():
+                meta_path = traj_dir / meta_path
             grid_meta = _read_json(meta_path) if meta_path.exists() else {}
             if grid_meta.get("grid_assignment") != "reference_frame_projection":
                 raise ValueError(

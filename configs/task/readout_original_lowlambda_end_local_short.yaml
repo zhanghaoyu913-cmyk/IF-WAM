@@ -1,0 +1,14 @@
+# @package _global_
+defaults:
+  - readout_original_lowlambda
+  - _self_
+
+ifwam:
+  ifwam:
+    data:
+      manifest_path: /2024233240/if-wam_incoming/ifwam_data/manifests/dense_ablation/train_libero_dense_f4_s1_grid_rgb_end_local_short.jsonl
+
+data:
+  train:
+    manifest_path: /2024233240/if-wam_incoming/ifwam_data/manifests/dense_ablation/train_libero_dense_f4_s1_grid_rgb_end_local_short.jsonl
+    enable_gridflow_teacher: true

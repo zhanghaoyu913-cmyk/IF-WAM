@@ -1,0 +1,11 @@
+# @package _global_
+defaults:
+  - ifwam_libero_gridfm_raw_grounding_1epoch
+  - _self_
+
+max_steps: 8679
+save_weights_steps: [500, 1000, 2000, 4000, 8679]
+save_weights_every: 0
+save_state_every: 0
+save_final_state: false
+eval_every: 0

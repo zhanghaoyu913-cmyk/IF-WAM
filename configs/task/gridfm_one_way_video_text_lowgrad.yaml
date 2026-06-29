@@ -1,0 +1,16 @@
+# @package _global_
+defaults:
+  - gridfm_one_way_direction_presence_loss_only
+  - _self_
+
+ifwam:
+  ifwam:
+    grid_flow_matching:
+      interaction_mode: one_way_aux
+      input_mode: noisy_teacher
+      target_mode: direction_presence
+      quality_application: loss_only
+      context_sources: video_text
+      detach_action_context: true
+      shared_grad_scale: 0.1
+      lambda_gridflow_fm: 0.1

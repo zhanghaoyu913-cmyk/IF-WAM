@@ -1,0 +1,17 @@
+# @package _global_
+defaults:
+  - gridfm_one_way_direction_presence
+  - _self_
+
+max_steps: 5000
+save_every: 0
+save_weights_every: 0
+save_weights_steps: [1000, 5000]
+save_state_every: 0
+save_final_state: false
+eval_every: 0
+
+ifwam:
+  ifwam:
+    grid_flow_matching:
+      quality_application: loss_only
